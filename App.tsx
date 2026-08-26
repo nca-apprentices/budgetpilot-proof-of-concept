@@ -14,6 +14,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   useColorScheme,
   View,
 } from 'react-native';
@@ -30,7 +31,7 @@ import { useModel } from 'react-native-litert-lm';
 const MODEL_PATH =
   '/Users/eakerman/development/typescript/budgetpilot/models/gemma3-1b-it-int4.litertlm';
 
-const TEST_PROMPT =
+const DEFAULT_PROMPT =
   'Fasse diese Ausgaben zusammen: Kopfhörer 150.-, Lebensmittel 320.-, Kino 40.-';
 
 function App() {
@@ -52,17 +53,23 @@ function LlmTestScreen() {
     // is the multimodal Gemma 3n, requesting a vision backend this
     // text-only model doesn't have (breaks conversation-context creation).
     useModel(MODEL_PATH, { backend: 'cpu', multimodal: false });
+  const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [response, setResponse] = useState<string | null>(null);
 
   const runTest = async () => {
     setResponse(null);
     try {
-      const result = await generate(TEST_PROMPT);
+      const result = await generate(prompt);
       console.log('[litert-lm] Antwort:', result);
       setResponse(result);
     } catch (e) {
       console.error('[litert-lm] Fehler bei der Inferenz:', e);
     }
+  };
+
+  const clear = () => {
+    setPrompt('');
+    setResponse(null);
   };
 
   let status = 'Modell wird geladen…';
@@ -81,16 +88,31 @@ function LlmTestScreen() {
       <Text style={styles.title}>LiteRT-LM Test — Gemma3-1B-IT</Text>
       <Text style={styles.status}>{status}</Text>
 
-      <View style={styles.buttonWrapper}>
-        <Button
-          title={isGenerating ? 'Läuft…' : 'Test ausführen'}
-          onPress={runTest}
-          disabled={!isReady || isGenerating}
-        />
-      </View>
-
       <Text style={styles.label}>Prompt:</Text>
-      <Text style={styles.prompt}>{TEST_PROMPT}</Text>
+      <TextInput
+        style={styles.input}
+        value={prompt}
+        onChangeText={setPrompt}
+        multiline
+        placeholder="Prompt eingeben…"
+      />
+
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isGenerating ? 'Läuft…' : 'Test ausführen'}
+            onPress={runTest}
+            disabled={!isReady || isGenerating || prompt.trim().length === 0}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Zurücksetzen"
+            onPress={clear}
+            disabled={isGenerating || (prompt.length === 0 && response === null)}
+          />
+        </View>
+      </View>
 
       <Text style={styles.label}>Antwort:</Text>
       <Text style={styles.response}>{response ?? '—'}</Text>
@@ -112,17 +134,28 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 16,
   },
-  buttonWrapper: {
+  buttonRow: {
+    flexDirection: 'row',
+    marginTop: 16,
     marginBottom: 24,
+  },
+  buttonWrapper: {
+    marginRight: 12,
   },
   label: {
     fontSize: 13,
     fontWeight: '600',
     marginTop: 12,
   },
-  prompt: {
+  input: {
     fontSize: 14,
     marginTop: 4,
+    minHeight: 60,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    padding: 8,
+    textAlignVertical: 'top',
   },
   response: {
     fontSize: 14,
