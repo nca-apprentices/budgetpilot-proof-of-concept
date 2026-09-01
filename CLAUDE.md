@@ -13,6 +13,8 @@
 - ✅ Baseline Budget Engine implementiert (`budget.ts` Datenmodell, `budgetEngine.ts` reine `computeBudget`-Funktion, Budget-Tab in App.tsx mit Einkommen-Eingabe, Fixkosten-/geplante-Käufe-Liste, Restbudget + Warnungen)
 - ✅ PDF-Export implementiert und im Simulator verifiziert: "Freundlich"-Layout (`pdfExport.ts`, reines `pdf-lib`, kein natives PDF-Modul) mit farbigen Kategorie-Chips + Datums-Pillen pro Posten, abgerundeten Posten-Karten, Zwischen-/Gesamtsumme, Restbudget-Fortschrittsbalken, Warnungs-Banner und einer KI-Zusammenfassungs-Box ("KI · BITTE PRÜFEN"), Speichern via `react-native-fs` + Teilen über den eingebauten `Share`-Dialog. Custom-Font-Embedding (Fraunces/Karla) ist am Hermes-Runtime gescheitert, läuft daher mit Standard-Fonts (Times-Italic für die grossen Zahlen, Helvetica/HelveticaBold sonst) — siehe Lessons Learned. `LineItem` um ein manuell editierbares Kaufdatum ergänzt (Textfeld "TT.MM.JJJJ" im Entwurf-Screen, kein nativer Datums-Picker).
 - ✅ **Wichtiger Bugfix, wirkt sich auf die ganze App aus:** `model.reset()` wird jetzt vor jedem unabhängigen `generate()`-Aufruf aufgerufen (LLM-Test, Freitext-Extraktion, PDF-Zusammenfassung) — vorher hing jeder Aufruf an derselben, endlos wachsenden Modell-Konversation, was zu Kontext-Verschmutzung zwischen völlig unabhängigen Anfragen führte (siehe Lessons Learned)
+- ✅ Kalender-Tab implementiert und im Simulator verifiziert (`react-native-calendars`, reines JS, kein natives Modul): Monatsansicht mit Punkt-Markierung an Tagen mit bereits erfassten Posten. Antippen eines Tages wechselt zu "Ausgabe erfassen" und füllt das Kaufdatum im Entwurf-Screen mit dem angetippten Datum vor (statt heutigem Datum) — nutzt das Kaufdatum-Feld aus dem PDF-Export-Feature weiter.
+- ✅ Projekt-Quelldateien nach `src/` umstrukturiert (App.tsx, budget.ts, budgetEngine.ts, pdfExport.ts, `__tests__/`); Config-Dateien bleiben im Root
 - ⏳ Offen: lokale Datenbank, Preislogik (toppreise.ch), Golden Set, Tests auf echten Geräten (aktuell nur Simulator), Umstieg auf multimodales Modell für Kamera-/Beleg-Scan
 
 ## Feststehende Tech-Entscheidungen
@@ -70,6 +72,9 @@ Nachweisen, dass BudgetPilot als On-Device-App (offline möglich) zuverlässig:
 7. **Kamera-/Beleg-Erfassung** (neu, per Feedback)
    - Kassenzettel/Belege per Kamera fotografieren, multimodales Modell extrahiert dieselben Felder wie beim Freitext-Pfad
    - Details/Modellwahl noch offen, siehe Status oben
+8. **Kalender-Ansicht** (neu, per Feedback) — implementiert
+   - Monatskalender (`react-native-calendars`) mit Punkt-Markierung an Tagen mit bereits erfassten Posten
+   - Antippen eines Tages öffnet "Ausgabe erfassen" mit vorausgefülltem Kaufdatum
 
 ### Out of Scope (für POC)
 
