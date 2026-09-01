@@ -232,6 +232,15 @@ function parseDateDMY(text: string): string | null {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 }
 
+// Sucht ein "TT.MM.JJJJ"-Datum irgendwo im Freitext (z.B. "Miete 15.09.2025")
+// statt es beim Extrahieren still zu verwerfen und immer das heutige Datum
+// vorzuschlagen. Bewusst per Regex statt übers LLM erkannt — deterministisch,
+// kein Hallucinationsrisiko, kein zusätzlicher Modell-Aufruf nötig.
+function findDateInText(text: string): string | null {
+  const match = text.match(/(\d{1,2}\.\d{1,2}\.\d{4})/);
+  return match ? parseDateDMY(match[1]) : null;
+}
+
 type Screen = 'expense' | 'budget' | 'calendar' | 'llmTest';
 
 function App() {
@@ -347,7 +356,7 @@ function ExpenseFlow({
       console.log('[extraction] Antwort:', result);
       const raw = extractJsonObject(result);
       setDraft(buildDraftFromRaw(raw));
-      setDraftInitialDate(prefilledDate ?? todayIso());
+      setDraftInitialDate(findDateInText(text) ?? prefilledDate ?? todayIso());
       onPrefilledDateConsumed();
       setStep('draft');
     } catch (e) {
