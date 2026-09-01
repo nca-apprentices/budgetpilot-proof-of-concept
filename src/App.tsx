@@ -11,7 +11,7 @@
  * @format
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Button,
   Pressable,
@@ -28,6 +28,7 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import { useModel, type UseModelResult } from 'react-native-litert-lm';
+import { Calendar, type DateData } from 'react-native-calendars';
 import {
   ALLOWED_CATEGORIES,
   type Category,
@@ -231,7 +232,7 @@ function parseDateDMY(text: string): string | null {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 }
 
-type Screen = 'expense' | 'budget' | 'llmTest';
+type Screen = 'expense' | 'budget' | 'calendar' | 'llmTest';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
@@ -239,6 +240,9 @@ function App() {
   const [screen, setScreen] = useState<Screen>('expense');
   const [income, setIncome] = useState<number | null>(null);
   const [items, setItems] = useState<LineItem[]>([]);
+  // Datum, das per Antippen im Kalender vorausgewählt wurde — füllt das
+  // Kaufdatum im nächsten Entwurf vor, wird danach sofort wieder geleert.
+  const [prefilledDate, setPrefilledDate] = useState<string | null>(null);
 
   const addItem = (item: LineItem) => setItems(prev => [...prev, item]);
 
@@ -248,7 +252,12 @@ function App() {
       <View style={styles.appContainer}>
         <ScreenTabs screen={screen} onChange={setScreen} />
         {screen === 'expense' && (
-          <ExpenseFlow model={model} onConfirmItem={addItem} />
+          <ExpenseFlow
+            model={model}
+            onConfirmItem={addItem}
+            prefilledDate={prefilledDate}
+            onPrefilledDateConsumed={() => setPrefilledDate(null)}
+          />
         )}
         {screen === 'budget' && (
           <BudgetScreen
@@ -256,6 +265,15 @@ function App() {
             income={income}
             onChangeIncome={setIncome}
             items={items}
+          />
+        )}
+        {screen === 'calendar' && (
+          <CalendarScreen
+            items={items}
+            onSelectDate={date => {
+              setPrefilledDate(date);
+              setScreen('expense');
+            }}
           />
         )}
         {screen === 'llmTest' && <LlmTestScreen model={model} />}
@@ -275,6 +293,7 @@ function ScreenTabs({
   const tabs: { key: Screen; label: string }[] = [
     { key: 'expense', label: 'Ausgabe erfassen' },
     { key: 'budget', label: 'Budget' },
+    { key: 'calendar', label: 'Kalender' },
     { key: 'llmTest', label: 'LLM-Test' },
   ];
   return (
@@ -302,14 +321,19 @@ function ScreenTabs({
 function ExpenseFlow({
   model,
   onConfirmItem,
+  prefilledDate,
+  onPrefilledDateConsumed,
 }: {
   model: UseModelResult;
   onConfirmItem: (item: LineItem) => void;
+  prefilledDate: string | null;
+  onPrefilledDateConsumed: () => void;
 }) {
   const { isReady, isGenerating, generate, reset } = model;
   const [step, setStep] = useState<'entry' | 'draft'>('entry');
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [draftInitialDate, setDraftInitialDate] = useState(todayIso());
   const [error, setError] = useState<string | null>(null);
 
   const handleWeiter = async () => {
@@ -323,6 +347,8 @@ function ExpenseFlow({
       console.log('[extraction] Antwort:', result);
       const raw = extractJsonObject(result);
       setDraft(buildDraftFromRaw(raw));
+      setDraftInitialDate(prefilledDate ?? todayIso());
+      onPrefilledDateConsumed();
       setStep('draft');
     } catch (e) {
       console.error('[extraction] Fehler:', e);
@@ -361,6 +387,7 @@ function ExpenseFlow({
     return (
       <DraftScreen
         draft={draft}
+        initialDate={draftInitialDate}
         onConfirm={handleBestaetigen}
         onDiscard={handleVerwerfen}
       />
@@ -375,6 +402,7 @@ function ExpenseFlow({
       isReady={isReady}
       isGenerating={isGenerating}
       error={error}
+      prefilledDate={prefilledDate}
     />
   );
 }
@@ -386,6 +414,7 @@ function EntryScreen({
   isReady,
   isGenerating,
   error,
+  prefilledDate,
 }: {
   text: string;
   onChangeText: (t: string) => void;
@@ -393,6 +422,7 @@ function EntryScreen({
   isReady: boolean;
   isGenerating: boolean;
   error: string | null;
+  prefilledDate: string | null;
 }) {
   const insets = useSafeAreaInsets();
 
@@ -412,6 +442,11 @@ function EntryScreen({
     >
       <Text style={styles.title}>Ausgabe erfassen</Text>
       <Text style={styles.status}>{status}</Text>
+      {prefilledDate && (
+        <Text style={styles.status}>
+          Für {formatDateDMY(prefilledDate)} — aus dem Kalender ausgewählt.
+        </Text>
+      )}
 
       <Text style={styles.label}>Ausgabe als Freitext:</Text>
       <TextInput
@@ -439,10 +474,12 @@ function EntryScreen({
 
 function DraftScreen({
   draft,
+  initialDate,
   onConfirm,
   onDiscard,
 }: {
   draft: Draft;
+  initialDate: string;
   onConfirm: (d: Draft, date: string) => void;
   onDiscard: () => void;
 }) {
@@ -454,7 +491,7 @@ function DraftScreen({
   const [currency, setCurrency] = useState(draft.currency);
   const [cadence, setCadence] = useState<Cadence>(draft.cadence);
   const [category, setCategory] = useState<Category | null>(draft.category);
-  const [dateText, setDateText] = useState(formatDateDMY(todayIso()));
+  const [dateText, setDateText] = useState(formatDateDMY(initialDate));
 
   const lowConfidence =
     draft.confidence !== null && draft.confidence < LOW_CONFIDENCE_THRESHOLD;
@@ -781,6 +818,53 @@ function LineItemRow({ item }: { item: LineItem }) {
         · {item.category ?? 'Sonstiges'}
       </Text>
     </View>
+  );
+}
+
+function CalendarScreen({
+  items,
+  onSelectDate,
+}: {
+  items: LineItem[];
+  onSelectDate: (isoDate: string) => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  // Tage mit mindestens einem erfassten Posten bekommen einen Punkt —
+  // reine Anzeige, keine Auswahl-Logik.
+  const markedDates = useMemo(() => {
+    const marks: Record<string, { marked: true; dotColor: string }> = {};
+    for (const item of items) {
+      if (item.date) {
+        marks[item.date] = { marked: true, dotColor: '#2563eb' };
+      }
+    }
+    return marks;
+  }, [items]);
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{
+        paddingTop: 20,
+        paddingBottom: insets.bottom + 24,
+        paddingHorizontal: 20,
+      }}
+    >
+      <Text style={styles.title}>Kalender</Text>
+      <Text style={styles.status}>
+        Auf ein Datum tippen, um dort eine Ausgabe zu erfassen.
+      </Text>
+      <Calendar
+        markedDates={markedDates}
+        onDayPress={(day: DateData) => onSelectDate(day.dateString)}
+        theme={{
+          todayTextColor: '#2563eb',
+          arrowColor: '#2563eb',
+          dotColor: '#2563eb',
+        }}
+      />
+    </ScrollView>
   );
 }
 
