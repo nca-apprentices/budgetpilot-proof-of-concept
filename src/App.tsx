@@ -1,19 +1,26 @@
 /**
  * BudgetPilot — On-Device-LLM-Test (react-native-litert-lm) + Ausgabenerfassung.
  *
- * Lädt Gemma3-1B-IT lokal (.litertlm) und stellt zwei Screens bereit:
+ * Lädt Gemma 4 E2B-it (multimodal: Text + Vision + Audio) und stellt vier
+ * Tabs bereit:
+ * - "Ausgabe erfassen": Freitext ODER Beleg-Foto → KI-Extraktion → Entwurf
+ *   zum Bestätigen, bevor irgendwas gespeichert wird.
+ * - "Budget": Einkommen, bestätigte Posten, Restbudget + Warnungen.
+ * - "Kalender": Monatsansicht, Antippen eines Tages öffnet "Ausgabe
+ *   erfassen" mit dem Datum vorausgefüllt.
  * - "LLM-Test": freier Prompt ans Modell, fürs Golden-Set-Testen.
- * - "Ausgabe erfassen": Freitext → KI-Extraktion → Entwurf zum Bestätigen,
- *   bevor irgendwas gespeichert wird.
  *
  * Absichtlich ohne echte Persistenz — siehe models/README.md.
  *
  * @format
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
   Button,
+  Image,
   Pressable,
   ScrollView,
   StatusBar,
@@ -27,23 +34,27 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
-import { useModel, type UseModelResult } from 'react-native-litert-lm';
+import { useModel, type UseModelResult, GEMMA_4_E2B_IT } from 'react-native-litert-lm';
 import { Calendar, type DateData } from 'react-native-calendars';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import {
   ALLOWED_CATEGORIES,
   type Category,
   type Cadence,
   type LineItem,
+  type Source,
 } from './budget';
 import { computeBudget } from './budgetEngine';
 import { buildBudgetReportPdf, savePdfAndShare } from './pdfExport';
 
-// Absoluter Pfad auf diesem Mac — der iOS-Simulator liest direkt vom
-// Host-Dateisystem. Datei manuell dorthin legen, siehe models/README.md.
-// Für ein echtes Gerät braucht es stattdessen einen In-App-Download in das
-// App-Sandbox-Verzeichnis (nicht Teil dieses minimalen Tests).
-const MODEL_PATH =
-  '/Users/eakerman/development/typescript/budgetpilot/models/gemma3-1b-it-int4.litertlm';
+// Öffentliche HuggingFace-URL (kein Login/Lizenz-Klick nötig, anders als das
+// vorherige Gemma-3-1B-IT-Setup). react-native-litert-lm lädt die Datei beim
+// ersten useModel()-Aufruf selbst per HTTPS herunter und cached sie lokal
+// (ModelRegistry) — kein manuelles Ablegen mehr wie in models/README.md
+// bisher beschrieben, und funktioniert dadurch (anders als der alte
+// hartcodierte Mac-Pfad) auch auf echten Geräten. ~2.6 GB, siehe
+// models/README.md für Download-Realitätscheck.
+const MODEL_SOURCE = GEMMA_4_E2B_IT;
 
 const DEFAULT_PROMPT =
   'Fasse diese Ausgaben zusammen: Kopfhörer 150.-, Lebensmittel 320.-, Kino 40.-';
@@ -63,23 +74,38 @@ type Draft = {
 
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
 
-function buildExtractionPrompt(userText: string): string {
-  return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Lies die folgende Freitext-Beschreibung einer Ausgabe und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
-
-Das JSON-Objekt muss genau diese Felder enthalten:
+// Gemeinsames JSON-Schema für Freitext- UND Foto-Extraktion — eine Quelle
+// der Wahrheit, damit beide Pfade garantiert dieselben Felder/Kategorien
+// liefern und über dieselbe buildDraftFromRaw()-Normalisierung laufen.
+function extractionSchemaInstructions(): string {
+  return `Das JSON-Objekt muss genau diese Felder enthalten:
 - "description": string — kurze Beschreibung der Ausgabe
 - "amount": Zahl — der Betrag, oder null falls nicht erkennbar
 - "currency": string — z.B. "CHF" oder "EUR"
 - "cadence": entweder "monthly" (wiederkehrend/monatlich) oder "one_time" (einmalig)
 - "category": genau eine dieser 7 Kategorien: Wohnen, Lebensmittel, Mobilität, Freizeit, Gesundheit, Abos, Sonstiges — oder "needs_input", falls keine sicher zugeordnet werden kann
 - "confidence": Zahl zwischen 0 und 1 — wie sicher du bei dieser Extraktion insgesamt bist
-- "reason": kurze Begründung auf Deutsch
+- "reason": kurze Begründung auf Deutsch`;
+}
+
+function buildExtractionPrompt(userText: string): string {
+  return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Lies die folgende Freitext-Beschreibung einer Ausgabe und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
+
+${extractionSchemaInstructions()}
 
 Beispiel:
 Text: "Miete 1200 CHF monatlich"
 Antwort: {"description":"Miete","amount":1200,"currency":"CHF","cadence":"monthly","category":"Wohnen","confidence":0.95,"reason":"Eindeutige monatliche Mietzahlung."}
 
 Text: "${userText}"
+Antwort:`;
+}
+
+function buildImageExtractionPrompt(): string {
+  return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Auf dem Bild ist ein Kassenzettel oder Beleg. Lies den Gesamtbetrag und die Art der Ausgabe und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
+
+${extractionSchemaInstructions()}
+
 Antwort:`;
 }
 
@@ -236,7 +262,14 @@ type Screen = 'expense' | 'budget' | 'calendar' | 'llmTest';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
-  const model = useModel(MODEL_PATH, { backend: 'cpu', multimodal: false });
+  const model = useModel(MODEL_SOURCE, {
+    backend: 'cpu',
+    // Explizit setzen statt uns auf die Dateinamens-Heuristik der Library zu
+    // verlassen (die nur nach "3n"/"gemma3" im Pfad sucht — bei
+    // "gemma-4-E2B-it.litertlm" würde sie ohnehin nicht greifen). Siehe
+    // Lessons Learned in CLAUDE.md zum früheren Multimodal-Bug mit Gemma 3 1B-IT.
+    multimodal: true,
+  });
   const [screen, setScreen] = useState<Screen>('expense');
   const [income, setIncome] = useState<number | null>(null);
   const [items, setItems] = useState<LineItem[]>([]);
@@ -329,12 +362,26 @@ function ExpenseFlow({
   prefilledDate: string | null;
   onPrefilledDateConsumed: () => void;
 }) {
-  const { isReady, isGenerating, generate, reset } = model;
+  const {
+    isReady,
+    isGenerating,
+    downloadProgress,
+    error: modelError,
+    generate,
+    reset,
+  } = model;
   const [step, setStep] = useState<'entry' | 'draft'>('entry');
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [draftInitialDate, setDraftInitialDate] = useState(todayIso());
+  const [draftSource, setDraftSource] = useState<Source>('free_text');
+  const [draftPhotoUri, setDraftPhotoUri] = useState<string | null>(null);
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Modell-Ladefehler (z.B. MemoryError) sind sonst unsichtbar — der Screen
+  // bliebe endlos bei "Modell wird geladen…" hängen, ohne dass der Nutzer
+  // erfährt, dass das Laden bereits fehlgeschlagen ist.
+  const displayError = modelError ? `Fehler beim Laden des Modells: ${modelError}` : error;
 
   const handleWeiter = async () => {
     setError(null);
@@ -349,6 +396,8 @@ function ExpenseFlow({
       setDraft(buildDraftFromRaw(raw));
       setDraftInitialDate(prefilledDate ?? todayIso());
       onPrefilledDateConsumed();
+      setDraftSource('free_text');
+      setDraftPhotoUri(null);
       setStep('draft');
     } catch (e) {
       console.error('[extraction] Fehler:', e);
@@ -358,8 +407,77 @@ function ExpenseFlow({
     }
   };
 
+  const processBelegUri = async (uri: string) => {
+    if (!model.model) {
+      setError('Modell ist noch nicht bereit.');
+      return;
+    }
+    setIsProcessingPhoto(true);
+    try {
+      // Wie beim Freitext-Pfad: jede Extraktion ist eine unabhängige
+      // Einzelanfrage, sonst hängt sie an der Konversationshistorie
+      // vorheriger Aufrufe (siehe CLAUDE.md Lessons Learned).
+      reset();
+      const imageBuffer = await (await fetch(uri)).arrayBuffer();
+      const result = await model.model.sendMultimodalMessage([
+        { type: 'image', imageBuffer },
+        { type: 'text', text: buildImageExtractionPrompt() },
+      ]);
+      console.log('[extraction-photo] Antwort:', result);
+      const raw = extractJsonObject(result);
+      setDraft(buildDraftFromRaw(raw));
+      setDraftInitialDate(prefilledDate ?? todayIso());
+      onPrefilledDateConsumed();
+      setDraftSource('photo');
+      setDraftPhotoUri(uri);
+      setStep('draft');
+    } catch (e) {
+      console.error('[extraction-photo] Fehler:', e);
+      setError('Der Beleg konnte nicht ausgewertet werden. Bitte erneut versuchen.');
+    } finally {
+      setIsProcessingPhoto(false);
+    }
+  };
+
+  const handleAufnehmen = async () => {
+    setError(null);
+    const photo = await launchCamera({ mediaType: 'photo', cameraType: 'back', quality: 1.0 });
+    if (photo.didCancel) {
+      return;
+    }
+    const uri = photo.assets?.[0]?.uri;
+    if (photo.errorCode || !uri) {
+      setError('Kamera konnte nicht geöffnet werden.');
+      return;
+    }
+    await processBelegUri(uri);
+  };
+
+  const handleHochladen = async () => {
+    setError(null);
+    const photo = await launchImageLibrary({ mediaType: 'photo', quality: 1.0 });
+    if (photo.didCancel) {
+      return;
+    }
+    const uri = photo.assets?.[0]?.uri;
+    if (photo.errorCode || !uri) {
+      setError('Bild konnte nicht ausgewählt werden.');
+      return;
+    }
+    await processBelegUri(uri);
+  };
+
+  const handleFoto = () => {
+    Alert.alert('Beleg hinzufügen', undefined, [
+      { text: 'Jetzt aufnehmen', onPress: handleAufnehmen },
+      { text: 'Hochladen', onPress: handleHochladen },
+      { text: 'Abbrechen', style: 'cancel' },
+    ]);
+  };
+
   const handleVerwerfen = () => {
     setDraft(null);
+    setDraftPhotoUri(null);
     setStep('entry');
   };
 
@@ -371,7 +489,7 @@ function ExpenseFlow({
       currency: finalDraft.currency,
       cadence: finalDraft.cadence,
       category: finalDraft.category,
-      source: 'free_text',
+      source: draftSource,
       confidence: finalDraft.confidence,
       notes: finalDraft.reason,
       date,
@@ -379,6 +497,7 @@ function ExpenseFlow({
     console.log('[expense] Bestätigt:', item);
     onConfirmItem(item);
     setDraft(null);
+    setDraftPhotoUri(null);
     setText('');
     setStep('entry');
   };
@@ -388,6 +507,7 @@ function ExpenseFlow({
       <DraftScreen
         draft={draft}
         initialDate={draftInitialDate}
+        photoUri={draftPhotoUri}
         onConfirm={handleBestaetigen}
         onDiscard={handleVerwerfen}
       />
@@ -399,9 +519,11 @@ function ExpenseFlow({
       text={text}
       onChangeText={setText}
       onWeiter={handleWeiter}
+      onFoto={handleFoto}
       isReady={isReady}
-      isGenerating={isGenerating}
-      error={error}
+      isBusy={isGenerating || isProcessingPhoto}
+      downloadProgress={downloadProgress}
+      error={displayError}
       prefilledDate={prefilledDate}
     />
   );
@@ -411,16 +533,20 @@ function EntryScreen({
   text,
   onChangeText,
   onWeiter,
+  onFoto,
   isReady,
-  isGenerating,
+  isBusy,
+  downloadProgress,
   error,
   prefilledDate,
 }: {
   text: string;
   onChangeText: (t: string) => void;
   onWeiter: () => void;
+  onFoto: () => void;
   isReady: boolean;
-  isGenerating: boolean;
+  isBusy: boolean;
+  downloadProgress: number;
   error: string | null;
   prefilledDate: string | null;
 }) {
@@ -429,6 +555,8 @@ function EntryScreen({
   let status = 'Modell wird geladen…';
   if (isReady) {
     status = 'Modell bereit.';
+  } else if (downloadProgress > 0) {
+    status = 'Lade Modell (~2.6 GB)…';
   }
 
   return (
@@ -447,6 +575,9 @@ function EntryScreen({
           Für {formatDateDMY(prefilledDate)} — aus dem Kalender ausgewählt.
         </Text>
       )}
+      {!isReady && downloadProgress > 0 && (
+        <DownloadProgressBar progress={downloadProgress} />
+      )}
 
       <Text style={styles.label}>Ausgabe als Freitext:</Text>
       <TextInput
@@ -462,9 +593,16 @@ function EntryScreen({
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
-            title={isGenerating ? 'Analysiere…' : 'Weiter'}
+            title={isBusy ? 'Analysiere…' : 'Weiter'}
             onPress={onWeiter}
-            disabled={!isReady || isGenerating || text.trim().length === 0}
+            disabled={!isReady || isBusy || text.trim().length === 0}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isBusy ? 'Analysiere…' : '📷 Beleg fotografieren'}
+            onPress={onFoto}
+            disabled={!isReady || isBusy}
           />
         </View>
       </View>
@@ -475,11 +613,13 @@ function EntryScreen({
 function DraftScreen({
   draft,
   initialDate,
+  photoUri,
   onConfirm,
   onDiscard,
 }: {
   draft: Draft;
   initialDate: string;
+  photoUri: string | null;
   onConfirm: (d: Draft, date: string) => void;
   onDiscard: () => void;
 }) {
@@ -525,6 +665,14 @@ function DraftScreen({
         <Text style={styles.status}>
           Vertrauen der KI-Extraktion: {Math.round(draft.confidence * 100)}%
         </Text>
+      )}
+
+      {photoUri && (
+        <Image
+          source={{ uri: photoUri }}
+          style={styles.receiptPreview}
+          resizeMode="contain"
+        />
       )}
 
       <Text style={styles.label}>Beschreibung</Text>
@@ -821,6 +969,59 @@ function LineItemRow({ item }: { item: LineItem }) {
   );
 }
 
+const PROGRESS_SAMPLE_INTERVAL_MS = 1000;
+
+// Der native Download-Callback feuert viel häufiger als jede Änderung
+// sichtbar gemacht werden sollte — ungefiltert durchgereicht flackert die
+// Prozentzahl mehrmals pro Sekunde. Hier wird nur der jeweils aktuellste
+// Wert alle 250ms übernommen, statt bei jedem einzelnen Event neu zu rendern.
+function useSampledProgress(value: number, intervalMs: number): number {
+  const latestRef = useRef(value);
+  latestRef.current = value;
+  const [sampled, setSampled] = useState(value);
+
+  useEffect(() => {
+    const id = setInterval(() => setSampled(latestRef.current), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+
+  return sampled;
+}
+
+function DownloadProgressBar({ progress }: { progress: number }) {
+  // `progress` ist ein Bruch (0–1), keine fertige Prozentzahl.
+  const sampled = useSampledProgress(progress, PROGRESS_SAMPLE_INTERVAL_MS);
+  const percent = Math.min(100, Math.max(0, Math.round(sampled * 100)));
+  const animatedWidth = useRef(new Animated.Value(percent)).current;
+
+  useEffect(() => {
+    Animated.timing(animatedWidth, {
+      toValue: percent,
+      duration: PROGRESS_SAMPLE_INTERVAL_MS,
+      useNativeDriver: false, // 'width' unterstützt keinen Native Driver
+    }).start();
+  }, [percent, animatedWidth]);
+
+  return (
+    <View style={styles.progressRow}>
+      <View style={styles.progressTrack}>
+        <Animated.View
+          style={[
+            styles.progressFill,
+            {
+              width: animatedWidth.interpolate({
+                inputRange: [0, 100],
+                outputRange: ['0%', '100%'],
+              }),
+            },
+          ]}
+        />
+      </View>
+      <Text style={styles.progressLabel}>{percent}%</Text>
+    </View>
+  );
+}
+
 function CalendarScreen({
   items,
   onSelectDate,
@@ -897,7 +1098,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
   let status = 'Modell wird geladen…';
   if (error) status = `Fehler beim Laden: ${error}`;
   else if (isReady) status = 'Modell bereit.';
-  else if (downloadProgress > 0) status = `Lade Modell… ${downloadProgress}%`;
+  else if (downloadProgress > 0) status = 'Lade Modell…';
 
   return (
     <ScrollView
@@ -908,8 +1109,9 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
         paddingHorizontal: 20,
       }}
     >
-      <Text style={styles.title}>LiteRT-LM Test — Gemma3-1B-IT</Text>
+      <Text style={styles.title}>LiteRT-LM Test — Gemma 4 E2B-it</Text>
       <Text style={styles.status}>{status}</Text>
+      {!isReady && downloadProgress > 0 && <DownloadProgressBar progress={downloadProgress} />}
 
       <Text style={styles.label}>Prompt:</Text>
       <TextInput
@@ -985,6 +1187,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 16,
+  },
+  receiptPreview: {
+    width: '100%',
+    height: 260,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    marginBottom: 16,
+    backgroundColor: '#f2f2f2',
+  },
+  progressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: -8,
+    marginBottom: 16,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#eee',
+    overflow: 'hidden',
+  },
+  progressLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 8,
+    minWidth: 34,
+    textAlign: 'right',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: '#2563eb',
   },
   buttonRow: {
     flexDirection: 'row',

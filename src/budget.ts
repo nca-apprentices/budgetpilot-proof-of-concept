@@ -33,8 +33,8 @@ export type Cadence = 'monthly' | 'one_time';
 
 // 'manual' und 'toppreise' sind noch nicht angebunden, aber schon Teil des
 // Enums, damit LineItem.source nicht erneut angepasst werden muss, sobald
-// diese Eingabewege dazukommen.
-export type Source = 'free_text' | 'manual' | 'toppreise';
+// diese Eingabewege dazukommen. 'photo' ist bereits aktiv (Beleg-Kamera-Pfad).
+export type Source = 'free_text' | 'photo' | 'manual' | 'toppreise';
 
 export type LineItem = {
   id: string;

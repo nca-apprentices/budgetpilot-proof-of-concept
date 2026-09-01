@@ -77,3 +77,10 @@ yarn-error.log
 # Local LLM model files (large, downloaded manually — see models/README.md)
 /models/*
 !/models/README.md
+
+# Test-Belegfotos mit echten (fremden) Kassenzetteldaten — nicht ins Repo,
+# siehe CLAUDE.md Lessons Learned. Lokal fuer Kamera-Pfad-Tests behalten,
+# bei Bedarf durch einen selbst erstellten Fake-Beleg ersetzen.
+test-quittung*.jpg
+test-beleg*.jpg
+test-receipt*.jpg

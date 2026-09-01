@@ -33,8 +33,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>BudgetPilot braucht Kamerazugriff, um Kassenzettel/Belege zu fotografieren und automatisch auszulesen.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BudgetPilot braucht Zugriff auf deine Fotos, um einen bereits fotografierten Kassenzettel/Beleg hochzuladen.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
