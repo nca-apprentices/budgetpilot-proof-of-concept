@@ -46,6 +46,7 @@ import {
 } from './budget';
 import { computeBudget } from './budgetEngine';
 import { buildBudgetReportPdf, savePdfAndShare } from './pdfExport';
+import { recognizeReceiptText } from './receiptOcr';
 
 // Öffentliche HuggingFace-URL (kein Login/Lizenz-Klick nötig, anders als das
 // vorherige Gemma-3-1B-IT-Setup). react-native-litert-lm lädt die Datei beim
@@ -101,10 +102,22 @@ Text: "${userText}"
 Antwort:`;
 }
 
-function buildImageExtractionPrompt(): string {
-  return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Auf dem Bild ist ein Kassenzettel oder Beleg. Lies den Gesamtbetrag und die Art der Ausgabe und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
+// Ersetzt die frühere direkte Bild-Extraktion (sendMultimodalMessage): statt
+// Gemma 4 E2B-it den Kassenzettel als Bild lesen zu lassen (unzuverlässig
+// bei feinem Druck, siehe CLAUDE.md Risiken/Lessons Learned), liest
+// ReceiptOCR.swift den Text zuerst per Vision-Framework aus, und nur der
+// erkannte Rohtext geht ans Modell — über denselben Extraktions-Pfad wie
+// Freitext, nur mit einer Beleg-spezifischen Einleitung statt der
+// Freitext-Einleitung von buildExtractionPrompt().
+function buildReceiptOcrExtractionPrompt(ocrText: string): string {
+  return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Der folgende Text wurde per OCR aus einem fotografierten Kassenzettel/Beleg erkannt (Zeilenumbrüche und Layout können durcheinander sein). Finde den Gesamtbetrag (meist bei "TOTAL") und die Art der Ausgabe, und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
 
 ${extractionSchemaInstructions()}
+
+OCR-Text:
+"""
+${ocrText}
+"""
 
 Antwort:`;
 }
@@ -414,15 +427,13 @@ function ExpenseFlow({
     }
     setIsProcessingPhoto(true);
     try {
+      const ocrText = await recognizeReceiptText(uri);
+      console.log('[extraction-photo] OCR-Text:', ocrText);
       // Wie beim Freitext-Pfad: jede Extraktion ist eine unabhängige
       // Einzelanfrage, sonst hängt sie an der Konversationshistorie
       // vorheriger Aufrufe (siehe CLAUDE.md Lessons Learned).
       reset();
-      const imageBuffer = await (await fetch(uri)).arrayBuffer();
-      const result = await model.model.sendMultimodalMessage([
-        { type: 'image', imageBuffer },
-        { type: 'text', text: buildImageExtractionPrompt() },
-      ]);
+      const result = await generate(buildReceiptOcrExtractionPrompt(ocrText));
       console.log('[extraction-photo] Antwort:', result);
       const raw = extractJsonObject(result);
       setDraft(buildDraftFromRaw(raw));
