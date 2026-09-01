@@ -16,6 +16,7 @@ function makeItem(overrides: Partial<LineItem>): LineItem {
     source: 'free_text',
     confidence: 0.9,
     notes: '',
+    date: '2026-01-01',
     ...overrides,
   };
 }
@@ -23,9 +24,19 @@ function makeItem(overrides: Partial<LineItem>): LineItem {
 describe('computeBudget', () => {
   test('Normalfall: Fixkosten + geplante Käufe, positives Restbudget', () => {
     const items = [
-      makeItem({ id: '1', description: 'Miete', amount: 1200, cadence: 'monthly' }),
+      makeItem({
+        id: '1',
+        description: 'Miete',
+        amount: 1200,
+        cadence: 'monthly',
+      }),
       makeItem({ id: '2', description: 'Abo', amount: 20, cadence: 'monthly' }),
-      makeItem({ id: '3', description: 'Kopfhörer', amount: 150, cadence: 'one_time' }),
+      makeItem({
+        id: '3',
+        description: 'Kopfhörer',
+        amount: 150,
+        cadence: 'one_time',
+      }),
     ];
 
     const result = computeBudget(4500, items);
@@ -40,8 +51,18 @@ describe('computeBudget', () => {
 
   test('Überschreitung: restbudget negativ → passende Warnung', () => {
     const items = [
-      makeItem({ id: '1', description: 'Miete', amount: 4000, cadence: 'monthly' }),
-      makeItem({ id: '2', description: 'Auto', amount: 1000, cadence: 'one_time' }),
+      makeItem({
+        id: '1',
+        description: 'Miete',
+        amount: 4000,
+        cadence: 'monthly',
+      }),
+      makeItem({
+        id: '2',
+        description: 'Auto',
+        amount: 1000,
+        cadence: 'one_time',
+      }),
     ];
 
     const result = computeBudget(4500, items);
@@ -53,7 +74,14 @@ describe('computeBudget', () => {
   });
 
   test('Restbudget knapp (< 15%): Warnung, aber keine Überschreitungs-Warnung', () => {
-    const items = [makeItem({ id: '1', description: 'Miete', amount: 4000, cadence: 'monthly' })];
+    const items = [
+      makeItem({
+        id: '1',
+        description: 'Miete',
+        amount: 4000,
+        cadence: 'monthly',
+      }),
+    ];
 
     // Restbudget = 500 von 4500 = 11.11% → < 15%, aber >= 0.
     const result = computeBudget(4500, items);

@@ -1,0 +1,9 @@
+node_modules
+ios
+android
+vendor
+Pods
+*.pbxproj
+*.xcworkspace
+package-lock.json
+models

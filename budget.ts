@@ -15,6 +15,20 @@ export const ALLOWED_CATEGORIES = [
 
 export type Category = (typeof ALLOWED_CATEGORIES)[number];
 
+// Identitätsfarbe pro Kategorie — aktuell nur vom PDF-Export (pdfExport.ts)
+// für die Kategorie-Chips genutzt, hier zentral definiert statt dort
+// dupliziert, falls später z.B. auch die Kategorie-Chips im DraftScreen
+// eingefärbt werden sollen.
+export const CATEGORY_COLORS: Record<Category, string> = {
+  Wohnen: '#5b7fa6',
+  Lebensmittel: '#7a9d54',
+  Mobilität: '#c98a3a',
+  Freizeit: '#b0568f',
+  Gesundheit: '#4f9d8f',
+  Abos: '#8a7fc9',
+  Sonstiges: '#8a8578',
+};
+
 export type Cadence = 'monthly' | 'one_time';
 
 // 'manual' und 'toppreise' sind noch nicht angebunden, aber schon Teil des
@@ -32,4 +46,7 @@ export type LineItem = {
   source: Source;
   confidence: number | null;
   notes: string;
+  // ISO-Datum (YYYY-MM-DD) — vom Nutzer im Entwurf-Screen frei editierbar,
+  // nicht vom Modell extrahiert (die KI liefert kein Datum).
+  date: string;
 };
