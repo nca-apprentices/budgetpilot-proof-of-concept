@@ -32,7 +32,9 @@ export function computeBudget(
 ): BudgetSummary {
   const validItems = items.filter(item => item.amount !== null);
   const fixedCosts = validItems.filter(item => item.cadence === 'monthly');
-  const plannedPurchases = validItems.filter(item => item.cadence === 'one_time');
+  const plannedPurchases = validItems.filter(
+    item => item.cadence === 'one_time',
+  );
 
   const totalFixedCosts = sumAmounts(fixedCosts);
   const totalPlannedPurchases = sumAmounts(plannedPurchases);
@@ -52,7 +54,9 @@ export function computeBudget(
   const warnings: string[] = [];
   if (restbudget !== null && restbudget < 0) {
     warnings.push(
-      `Budget überschritten: ${Math.abs(restbudget).toFixed(2)} CHF über dem verfügbaren Einkommen.`,
+      `Budget überschritten: ${Math.abs(restbudget).toFixed(
+        2,
+      )} CHF über dem verfügbaren Einkommen.`,
     );
   } else if (
     restbudget !== null &&
@@ -61,7 +65,9 @@ export function computeBudget(
     restbudgetPercent < LOW_BUDGET_WARNING_PERCENT
   ) {
     warnings.push(
-      `Restbudget knapp: nur noch ${restbudgetPercent.toFixed(1)}% des Einkommens übrig.`,
+      `Restbudget knapp: nur noch ${restbudgetPercent.toFixed(
+        1,
+      )}% des Einkommens übrig.`,
     );
   }
 

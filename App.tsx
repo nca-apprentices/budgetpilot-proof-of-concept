@@ -28,8 +28,14 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import { useModel, type UseModelResult } from 'react-native-litert-lm';
-import { ALLOWED_CATEGORIES, type Category, type Cadence, type LineItem } from './budget';
+import {
+  ALLOWED_CATEGORIES,
+  type Category,
+  type Cadence,
+  type LineItem,
+} from './budget';
 import { computeBudget } from './budgetEngine';
+import { buildBudgetReportPdf, savePdfAndShare } from './pdfExport';
 
 // Absoluter Pfad auf diesem Mac — der iOS-Simulator liest direkt vom
 // Host-Dateisystem. Datei manuell dorthin legen, siehe models/README.md.
@@ -76,6 +82,54 @@ Text: "${userText}"
 Antwort:`;
 }
 
+function buildSummaryPrompt(
+  income: number | null,
+  items: LineItem[],
+  summary: ReturnType<typeof computeBudget>,
+): string {
+  const formatItems = (list: LineItem[]) =>
+    list.length === 0
+      ? '(keine)'
+      : list
+          .map(
+            item =>
+              `- ${item.description}: ${
+                item.amount !== null
+                  ? `${item.amount} ${item.currency}`
+                  : 'unbekannt'
+              } (${item.category ?? 'Sonstiges'})`,
+          )
+          .join('\n');
+
+  const fixedCosts = items.filter(item => item.cadence === 'monthly');
+  const plannedPurchases = items.filter(item => item.cadence === 'one_time');
+
+  // Die Zahlen sind bereits von computeBudget() berechnet und werden dem
+  // Modell als feststehende Fakten vorgegeben — es soll nur noch formulieren,
+  // nicht selbst rechnen. Reduziert das Halluzinationsrisiko, das beim
+  // Foto-Extraktionspfad bereits aufgefallen ist (siehe CLAUDE.md).
+  return `Du bist ein Finanz-Assistent für die Budget-App BudgetPilot. Hier sind bereits berechnete, korrekte Zahlen zu einem Budget — verwende ausschliesslich diese Zahlen, erfinde, runde oder berechne nichts neu:
+
+Einkommen: ${income !== null ? `${income} CHF/Monat` : 'nicht angegeben'}
+Fixkosten (monatlich):
+${formatItems(fixedCosts)}
+Geplante Käufe (einmalig):
+${formatItems(plannedPurchases)}
+Fixkosten gesamt: ${summary.totalFixedCosts} CHF
+Geplante Käufe gesamt: ${summary.totalPlannedPurchases} CHF
+Restbudget: ${
+    summary.restbudget !== null
+      ? `${summary.restbudget} CHF (${summary.restbudgetPercent?.toFixed(
+          1,
+        )}% des Einkommens)`
+      : 'unbekannt'
+  }
+
+Formuliere daraus einen kurzen, freundlichen Fliesstext (2-3 Sätze) auf Deutsch für den Nutzer. Antworte NUR mit diesem Fliesstext — keine Anführungszeichen, keine Überschrift, kein JSON, kein Markdown.
+
+Antwort:`;
+}
+
 function extractJsonObject(raw: string): unknown {
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
@@ -92,7 +146,11 @@ function parseAmount(raw: unknown): number | null {
   if (typeof raw === 'number') {
     return Number.isFinite(raw) ? raw : null;
   }
-  const n = parseFloat(String(raw).replace(',', '.').replace(/[^0-9.-]/g, ''));
+  const n = parseFloat(
+    String(raw)
+      .replace(',', '.')
+      .replace(/[^0-9.-]/g, ''),
+  );
   return Number.isFinite(n) ? n : null;
 }
 
@@ -148,6 +206,31 @@ function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDateDMY(iso: string): string {
+  const [year, month, day] = iso.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+// Robust: akzeptiert "TT.MM.JJJJ", füllt einstellige Tag/Monat-Angaben auf.
+// Gibt null zurück statt zu werfen, wenn der Text nicht als Datum lesbar ist.
+function parseDateDMY(text: string): string | null {
+  const match = text.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!match) {
+    return null;
+  }
+  const [, day, month, year] = match;
+  const dayNum = Number(day);
+  const monthNum = Number(month);
+  if (dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) {
+    return null;
+  }
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
 type Screen = 'expense' | 'budget' | 'llmTest';
 
 function App() {
@@ -164,9 +247,16 @@ function App() {
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <View style={styles.appContainer}>
         <ScreenTabs screen={screen} onChange={setScreen} />
-        {screen === 'expense' && <ExpenseFlow model={model} onConfirmItem={addItem} />}
+        {screen === 'expense' && (
+          <ExpenseFlow model={model} onConfirmItem={addItem} />
+        )}
         {screen === 'budget' && (
-          <BudgetScreen income={income} onChangeIncome={setIncome} items={items} />
+          <BudgetScreen
+            model={model}
+            income={income}
+            onChangeIncome={setIncome}
+            items={items}
+          />
         )}
         {screen === 'llmTest' && <LlmTestScreen model={model} />}
       </View>
@@ -192,9 +282,15 @@ function ScreenTabs({
       {tabs.map(tab => (
         <Pressable
           key={tab.key}
-          style={[styles.tabButton, screen === tab.key && styles.tabButtonActive]}
-          onPress={() => onChange(tab.key)}>
-          <Text style={[styles.tabText, screen === tab.key && styles.tabTextActive]}>
+          style={[
+            styles.tabButton,
+            screen === tab.key && styles.tabButtonActive,
+          ]}
+          onPress={() => onChange(tab.key)}
+        >
+          <Text
+            style={[styles.tabText, screen === tab.key && styles.tabTextActive]}
+          >
             {tab.label}
           </Text>
         </Pressable>
@@ -210,7 +306,7 @@ function ExpenseFlow({
   model: UseModelResult;
   onConfirmItem: (item: LineItem) => void;
 }) {
-  const { isReady, isGenerating, generate } = model;
+  const { isReady, isGenerating, generate, reset } = model;
   const [step, setStep] = useState<'entry' | 'draft'>('entry');
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -219,6 +315,10 @@ function ExpenseFlow({
   const handleWeiter = async () => {
     setError(null);
     try {
+      // Jede Extraktion ist eine unabhängige Einzelanfrage — ohne Reset würde
+      // sie an die wachsende Konversationshistorie älterer Aufrufe anhängen
+      // und das Modell zunehmend verwirren (siehe CLAUDE.md Lessons Learned).
+      reset();
       const result = await generate(buildExtractionPrompt(text));
       console.log('[extraction] Antwort:', result);
       const raw = extractJsonObject(result);
@@ -237,7 +337,7 @@ function ExpenseFlow({
     setStep('entry');
   };
 
-  const handleBestaetigen = (finalDraft: Draft) => {
+  const handleBestaetigen = (finalDraft: Draft, date: string) => {
     const item: LineItem = {
       id: createId(),
       description: finalDraft.description,
@@ -248,6 +348,7 @@ function ExpenseFlow({
       source: 'free_text',
       confidence: finalDraft.confidence,
       notes: finalDraft.reason,
+      date,
     };
     console.log('[expense] Bestätigt:', item);
     onConfirmItem(item);
@@ -257,7 +358,13 @@ function ExpenseFlow({
   };
 
   if (step === 'draft' && draft) {
-    return <DraftScreen draft={draft} onConfirm={handleBestaetigen} onDiscard={handleVerwerfen} />;
+    return (
+      <DraftScreen
+        draft={draft}
+        onConfirm={handleBestaetigen}
+        onDiscard={handleVerwerfen}
+      />
+    );
   }
 
   return (
@@ -301,7 +408,8 @@ function EntryScreen({
         paddingTop: 20,
         paddingBottom: insets.bottom + 24,
         paddingHorizontal: 20,
-      }}>
+      }}
+    >
       <Text style={styles.title}>Ausgabe erfassen</Text>
       <Text style={styles.status}>{status}</Text>
 
@@ -335,7 +443,7 @@ function DraftScreen({
   onDiscard,
 }: {
   draft: Draft;
-  onConfirm: (d: Draft) => void;
+  onConfirm: (d: Draft, date: string) => void;
   onDiscard: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -346,6 +454,7 @@ function DraftScreen({
   const [currency, setCurrency] = useState(draft.currency);
   const [cadence, setCadence] = useState<Cadence>(draft.cadence);
   const [category, setCategory] = useState<Category | null>(draft.category);
+  const [dateText, setDateText] = useState(formatDateDMY(todayIso()));
 
   const lowConfidence =
     draft.confidence !== null && draft.confidence < LOW_CONFIDENCE_THRESHOLD;
@@ -372,7 +481,8 @@ function DraftScreen({
         paddingTop: 20,
         paddingBottom: insets.bottom + 24,
         paddingHorizontal: 20,
-      }}>
+      }}
+    >
       <Text style={styles.title}>Entwurf bestätigen</Text>
       {draft.confidence !== null && (
         <Text style={styles.status}>
@@ -409,18 +519,22 @@ function DraftScreen({
       />
 
       <Text style={styles.label}>Häufigkeit</Text>
-      <View style={[styles.segmentRow, lowConfidence && styles.lowConfidenceBorder]}>
+      <View
+        style={[styles.segmentRow, lowConfidence && styles.lowConfidenceBorder]}
+      >
         <Pressable
           style={[
             styles.segmentButton,
             cadence === 'monthly' && styles.segmentButtonActive,
           ]}
-          onPress={() => setCadence('monthly')}>
+          onPress={() => setCadence('monthly')}
+        >
           <Text
             style={[
               styles.segmentText,
               cadence === 'monthly' && styles.segmentTextActive,
-            ]}>
+            ]}
+          >
             monatlich
           </Text>
         </Pressable>
@@ -429,12 +543,14 @@ function DraftScreen({
             styles.segmentButton,
             cadence === 'one_time' && styles.segmentButtonActive,
           ]}
-          onPress={() => setCadence('one_time')}>
+          onPress={() => setCadence('one_time')}
+        >
           <Text
             style={[
               styles.segmentText,
               cadence === 'one_time' && styles.segmentTextActive,
-            ]}>
+            ]}
+          >
             einmalig
           </Text>
         </Pressable>
@@ -446,14 +562,20 @@ function DraftScreen({
           styles.chipContainer,
           lowConfidence && styles.lowConfidenceBorder,
           categoryNeedsInput && styles.needsInputBorder,
-        ]}>
+        ]}
+      >
         {ALLOWED_CATEGORIES.map(c => (
           <Pressable
             key={c}
             style={[styles.chip, category === c && styles.chipSelected]}
-            onPress={() => setCategory(c)}>
+            onPress={() => setCategory(c)}
+          >
             <Text
-              style={[styles.chipText, category === c && styles.chipTextSelected]}>
+              style={[
+                styles.chipText,
+                category === c && styles.chipTextSelected,
+              ]}
+            >
               {c}
             </Text>
           </Pressable>
@@ -463,21 +585,33 @@ function DraftScreen({
         <Text style={styles.needsInputHint}>Bitte Kategorie auswählen.</Text>
       )}
 
+      <Text style={styles.label}>Kaufdatum</Text>
+      <TextInput
+        style={styles.input}
+        value={dateText}
+        onChangeText={setDateText}
+        placeholder="TT.MM.JJJJ"
+        keyboardType="numeric"
+      />
+
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
           <Button
             title="Bestätigen"
             disabled={!canConfirm}
             onPress={() =>
-              onConfirm({
-                description: description.trim(),
-                amount: parsedAmount,
-                currency: currency.trim() || 'CHF',
-                cadence,
-                category,
-                confidence: draft.confidence,
-                reason: draft.reason,
-              })
+              onConfirm(
+                {
+                  description: description.trim(),
+                  amount: parsedAmount,
+                  currency: currency.trim() || 'CHF',
+                  cadence,
+                  category,
+                  confidence: draft.confidence,
+                  reason: draft.reason,
+                },
+                parseDateDMY(dateText) ?? todayIso(),
+              )
             }
           />
         </View>
@@ -490,16 +624,22 @@ function DraftScreen({
 }
 
 function BudgetScreen({
+  model,
   income,
   onChangeIncome,
   items,
 }: {
+  model: UseModelResult;
   income: number | null;
   onChangeIncome: (income: number | null) => void;
   items: LineItem[];
 }) {
   const insets = useSafeAreaInsets();
-  const [incomeText, setIncomeText] = useState(income === null ? '' : String(income));
+  const [incomeText, setIncomeText] = useState(
+    income === null ? '' : String(income),
+  );
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const handleIncomeChange = (t: string) => {
     setIncomeText(t);
@@ -512,6 +652,39 @@ function BudgetScreen({
   const plannedPurchases = items.filter(item => item.cadence === 'one_time');
   const summary = computeBudget(income, items);
 
+  const handleExportPdf = async () => {
+    setExportError(null);
+    setIsExporting(true);
+    let aiSummaryText: string | null = null;
+    // KI-Zusammenfassung ist ein optionales Extra — schlägt sie fehl, wird
+    // trotzdem ein PDF mit den (verlässlichen) strukturierten Daten exportiert.
+    if (model.isReady) {
+      try {
+        model.reset();
+        const raw = await model.generate(
+          buildSummaryPrompt(income, items, summary),
+        );
+        aiSummaryText = raw.trim() || null;
+      } catch (e) {
+        console.error('[pdf-summary] Fehler:', e);
+      }
+    }
+    try {
+      const bytes = await buildBudgetReportPdf({
+        income,
+        items,
+        summary,
+        aiSummaryText,
+      });
+      await savePdfAndShare(bytes, `budgetpilot-bericht-${Date.now()}.pdf`);
+    } catch (e) {
+      console.error('[pdf-export] Fehler:', e);
+      setExportError('PDF-Export fehlgeschlagen. Bitte erneut versuchen.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <ScrollView
       style={styles.container}
@@ -519,7 +692,8 @@ function BudgetScreen({
         paddingTop: 20,
         paddingBottom: insets.bottom + 24,
         paddingHorizontal: 20,
-      }}>
+      }}
+    >
       <Text style={styles.title}>Budget</Text>
 
       <Text style={styles.label}>Monatliches Einkommen</Text>
@@ -548,10 +722,13 @@ function BudgetScreen({
       <Text style={styles.label}>Zusammenfassung</Text>
       <Text style={styles.status}>
         Fixkosten gesamt: {summary.totalFixedCosts.toFixed(2)} CHF{'\n'}
-        Geplante Käufe gesamt: {summary.totalPlannedPurchases.toFixed(2)} CHF{'\n'}
+        Geplante Käufe gesamt: {summary.totalPlannedPurchases.toFixed(2)} CHF
+        {'\n'}
         Ausgaben gesamt: {summary.totalSpent.toFixed(2)} CHF{'\n'}
         Restbudget:{' '}
-        {summary.restbudget === null ? '—' : `${summary.restbudget.toFixed(2)} CHF`}
+        {summary.restbudget === null
+          ? '—'
+          : `${summary.restbudget.toFixed(2)} CHF`}
         {summary.restbudgetPercent !== null &&
           ` (${summary.restbudgetPercent.toFixed(1)}%)`}
       </Text>
@@ -564,17 +741,31 @@ function BudgetScreen({
             style={[
               styles.warningBox,
               { borderColor: isOverBudget ? DANGER_COLOR : CAUTION_COLOR },
-            ]}>
+            ]}
+          >
             <Text
               style={[
                 styles.warningText,
                 { color: isOverBudget ? DANGER_COLOR : CAUTION_COLOR },
-              ]}>
+              ]}
+            >
               {warning}
             </Text>
           </View>
         );
       })}
+
+      {exportError && <Text style={styles.errorText}>{exportError}</Text>}
+
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={isExporting ? 'Exportiere…' : 'Als PDF exportieren'}
+            onPress={handleExportPdf}
+            disabled={isExporting}
+          />
+        </View>
+      </View>
     </ScrollView>
   );
 }
@@ -584,8 +775,10 @@ function LineItemRow({ item }: { item: LineItem }) {
     <View style={styles.lineItemRow}>
       <Text style={styles.lineItemDescription}>{item.description}</Text>
       <Text style={styles.lineItemMeta}>
-        {item.amount !== null ? `${item.amount.toFixed(2)} ${item.currency}` : '—'} ·{' '}
-        {item.category ?? 'Sonstiges'}
+        {item.amount !== null
+          ? `${item.amount.toFixed(2)} ${item.currency}`
+          : '—'}{' '}
+        · {item.category ?? 'Sonstiges'}
       </Text>
     </View>
   );
@@ -593,13 +786,17 @@ function LineItemRow({ item }: { item: LineItem }) {
 
 function LlmTestScreen({ model }: { model: UseModelResult }) {
   const insets = useSafeAreaInsets();
-  const { isReady, isGenerating, downloadProgress, error, generate } = model;
+  const { isReady, isGenerating, downloadProgress, error, generate, reset } =
+    model;
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [response, setResponse] = useState<string | null>(null);
 
   const runTest = async () => {
     setResponse(null);
     try {
+      // Jeder Testlauf ist ein unabhängiger Einzel-Prompt (kein Chat) — ohne
+      // Reset würde er an die Historie vorheriger Läufe/Screens anhängen.
+      reset();
       const result = await generate(prompt);
       console.log('[litert-lm] Antwort:', result);
       setResponse(result);
@@ -625,7 +822,8 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
         paddingTop: 20,
         paddingBottom: insets.bottom + 24,
         paddingHorizontal: 20,
-      }}>
+      }}
+    >
       <Text style={styles.title}>LiteRT-LM Test — Gemma3-1B-IT</Text>
       <Text style={styles.status}>{status}</Text>
 
@@ -650,7 +848,9 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
           <Button
             title="Zurücksetzen"
             onPress={clear}
-            disabled={isGenerating || (prompt.length === 0 && response === null)}
+            disabled={
+              isGenerating || (prompt.length === 0 && response === null)
+            }
           />
         </View>
       </View>
