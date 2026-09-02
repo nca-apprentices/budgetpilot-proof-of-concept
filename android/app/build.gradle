@@ -105,6 +105,20 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
+
+    // react-native-litert-lm's libLiteRTLM.so needs a newer libc++_shared.so
+    // (references __cxa_init_primary_exception) than the one that otherwise
+    // wins the merge from another native module — causes UnsatisfiedLinkError
+    // at runtime with no build-time warning. The correct, newer copy is
+    // checked into src/main/jniLibs/ (copied from react-native-litert-lm's
+    // own merged native libs); pickFirst here makes sure that app-level copy
+    // wins over any other module's older one instead of Gradle's implicit
+    // (and here wrong) default choice. See CLAUDE.md Lessons Learned.
+    packagingOptions {
+        jniLibs {
+            pickFirsts += ["**/libc++_shared.so"]
+        }
+    }
 }
 
 dependencies {

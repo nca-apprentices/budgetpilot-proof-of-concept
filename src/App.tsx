@@ -21,6 +21,7 @@ import {
   Animated,
   Button,
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -304,9 +305,22 @@ function parseDateDMY(text: string): string | null {
 type Screen = 'expense' | 'budget' | 'calendar' | 'llmTest';
 
 function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   const model = useModel(MODEL_SOURCE, {
+    // 'cpu' auf beiden Plattformen — auf Android macht die Wahl aktuell
+    // ohnehin keinen Unterschied: der Audio-Encoder läuft laut Library immer
+    // fest auf CPU/XNNPACK, egal welches Hauptbackend gewählt wird (cpu/gpu/
+    // npu alle getestet, identischer Absturz). Siehe CLAUDE.md Lessons
+    // Learned zum Android-XNNPACK-SIGILL-Emulatorproblem.
     backend: 'cpu',
+    // Nur auf Android: die Vorab-Schätzung verweigert das Laden auf dem
+    // echten Galaxy S21 FE (7.5 GB RAM) knapp (~450 MB "fehlend" laut
+    // Schätzung, schwankt mit laufenden Hintergrund-Apps) — JS-seitiger
+    // Override, siehe CLAUDE.md Lessons Learned. Auf iOS hat die
+    // Vorab-Schätzung bisher nie fälschlich blockiert, daher dort nicht
+    // pauschal umgangen.
+    forceLoad: Platform.OS === 'android',
     // Explizit setzen statt uns auf die Dateinamens-Heuristik der Library zu
     // verlassen (die nur nach "3n"/"gemma3" im Pfad sucht — bei
     // "gemma-4-E2B-it.litertlm" würde sie ohnehin nicht greifen). Siehe
@@ -341,7 +355,7 @@ function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'} />
       <View style={styles.appContainer}>
         <ScreenTabs screen={screen} onChange={setScreen} />
         {screen === 'expense' && (
@@ -383,6 +397,8 @@ function ScreenTabs({
   onChange: (s: Screen) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   const tabs: { key: Screen; label: string }[] = [
     { key: 'expense', label: 'Ausgabe erfassen' },
     { key: 'budget', label: 'Budget' },
@@ -619,6 +635,8 @@ function EntryScreen({
   prefilledDate: string | null;
 }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
 
   let status = 'Modell wird geladen…';
   if (isReady) {
@@ -654,6 +672,7 @@ function EntryScreen({
         onChangeText={onChangeText}
         multiline
         placeholder="z.B. Miete 1200 CHF monatlich"
+        placeholderTextColor={colors.placeholder}
       />
 
       {error && <Text style={styles.errorText}>{error}</Text>}
@@ -692,6 +711,8 @@ function DraftScreen({
   onDiscard: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   const [description, setDescription] = useState(draft.description);
   const [amountText, setAmountText] = useState(
     draft.amount === null ? '' : String(draft.amount),
@@ -749,6 +770,7 @@ function DraftScreen({
         value={description}
         onChangeText={setDescription}
         placeholder="Beschreibung"
+        placeholderTextColor={colors.placeholder}
       />
 
       <Text style={styles.label}>Betrag</Text>
@@ -758,6 +780,7 @@ function DraftScreen({
         onChangeText={setAmountText}
         keyboardType="numeric"
         placeholder={amountNeedsInput ? 'Betrag eingeben' : undefined}
+        placeholderTextColor={colors.placeholder}
       />
       {amountNeedsInput && (
         <Text style={styles.needsInputHint}>Bitte Betrag ausfüllen.</Text>
@@ -769,6 +792,7 @@ function DraftScreen({
         value={currency}
         onChangeText={setCurrency}
         placeholder="CHF"
+        placeholderTextColor={colors.placeholder}
       />
 
       <Text style={styles.label}>Häufigkeit</Text>
@@ -845,6 +869,7 @@ function DraftScreen({
         onChangeText={setDateText}
         placeholder="TT.MM.JJJJ"
         keyboardType="numeric"
+        placeholderTextColor={colors.placeholder}
       />
 
       <View style={styles.buttonRow}>
@@ -888,6 +913,8 @@ function BudgetScreen({
   items: LineItem[];
 }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   const [incomeText, setIncomeText] = useState(
     income === null ? '' : String(income),
   );
@@ -956,6 +983,7 @@ function BudgetScreen({
         onChangeText={handleIncomeChange}
         keyboardType="numeric"
         placeholder="z.B. 4500"
+        placeholderTextColor={colors.placeholder}
       />
 
       <Text style={styles.label}>Fixkosten (monatlich)</Text>
@@ -1024,6 +1052,8 @@ function BudgetScreen({
 }
 
 function LineItemRow({ item }: { item: LineItem }) {
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   return (
     <View style={styles.lineItemRow}>
       <Text style={styles.lineItemDescription}>{item.description}</Text>
@@ -1061,6 +1091,8 @@ function DownloadProgressBar({ progress }: { progress: number }) {
   const sampled = useSampledProgress(progress, PROGRESS_SAMPLE_INTERVAL_MS);
   const percent = Math.min(100, Math.max(0, Math.round(sampled * 100)));
   const animatedWidth = useRef(new Animated.Value(percent)).current;
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
 
   useEffect(() => {
     Animated.timing(animatedWidth, {
@@ -1098,6 +1130,8 @@ function CalendarScreen({
   onSelectDate: (isoDate: string) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
 
   // Tage mit mindestens einem erfassten Posten bekommen einen Punkt —
   // reine Anzeige, keine Auswahl-Logik.
@@ -1131,6 +1165,11 @@ function CalendarScreen({
           todayTextColor: '#2563eb',
           arrowColor: '#2563eb',
           dotColor: '#2563eb',
+          calendarBackground: colors.background,
+          dayTextColor: colors.text,
+          monthTextColor: colors.text,
+          textSectionTitleColor: colors.textMuted,
+          textDisabledColor: colors.borderSubtle,
         }}
       />
     </ScrollView>
@@ -1139,6 +1178,8 @@ function CalendarScreen({
 
 function LlmTestScreen({ model }: { model: UseModelResult }) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
   const { isReady, isGenerating, downloadProgress, error, generate, reset } =
     model;
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
@@ -1188,6 +1229,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
         onChangeText={setPrompt}
         multiline
         placeholder="Prompt eingeben…"
+        placeholderTextColor={colors.placeholder}
       />
 
       <View style={styles.buttonRow}>
@@ -1215,206 +1257,243 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
   );
 }
 
-const styles = StyleSheet.create({
-  appContainer: {
-    flex: 1,
-  },
-  container: {
-    flex: 1,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
-  },
-  tabButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    marginRight: 8,
-  },
-  tabButtonActive: {
-    backgroundColor: '#2563eb',
-  },
-  tabText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-  },
-  tabTextActive: {
-    color: '#fff',
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  status: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 16,
-  },
-  receiptPreview: {
-    width: '100%',
-    height: 260,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    marginBottom: 16,
-    backgroundColor: '#f2f2f2',
-  },
-  progressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: -8,
-    marginBottom: 16,
-  },
-  progressTrack: {
-    flex: 1,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#eee',
-    overflow: 'hidden',
-  },
-  progressLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginLeft: 8,
-    minWidth: 34,
-    textAlign: 'right',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-    backgroundColor: '#2563eb',
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    marginTop: 16,
-    marginBottom: 24,
-  },
-  buttonWrapper: {
-    marginRight: 12,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 12,
-  },
-  input: {
-    fontSize: 14,
-    marginTop: 4,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    padding: 8,
-    textAlignVertical: 'top',
-  },
-  response: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  errorText: {
-    fontSize: 13,
-    color: DANGER_COLOR,
-    marginTop: 8,
-  },
-  lowConfidenceBorder: {
-    borderColor: CAUTION_COLOR,
-    borderWidth: 2,
-  },
-  needsInputBorder: {
-    borderColor: DANGER_COLOR,
-    borderWidth: 2,
-  },
-  needsInputHint: {
-    fontSize: 12,
-    color: DANGER_COLOR,
-    marginTop: 4,
-  },
-  warningBox: {
-    borderWidth: 2,
-    borderRadius: 6,
-    padding: 10,
-    marginTop: 8,
-  },
-  warningText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  lineItemRow: {
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 6,
-    padding: 8,
-    marginTop: 4,
-  },
-  lineItemDescription: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  lineItemMeta: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
-  },
-  segmentRow: {
-    flexDirection: 'row',
-    marginTop: 4,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  segmentButton: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  segmentButtonActive: {
-    backgroundColor: '#2563eb',
-  },
-  segmentText: {
-    fontSize: 14,
-    color: '#333',
-  },
-  segmentTextActive: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  chipContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 4,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    borderRadius: 6,
-  },
-  chip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    marginRight: 8,
-    marginBottom: 8,
-  },
-  chipSelected: {
-    backgroundColor: '#2563eb',
-    borderColor: '#2563eb',
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#333',
-  },
-  chipTextSelected: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-});
+// Theme-Farben für Dark Mode — vorher wurde `isDarkMode` nur für die
+// StatusBar-Icons genutzt, alle Text-/Rahmenfarben waren fest auf helle
+// Werte codiert (z.B. dunkelgraue Schrift ohne gesetzten Hintergrund),
+// dadurch auf einem dunklen System-Theme kaum lesbar (bestätigt auf echtem
+// Android-Gerät). `getStyles()` wird jetzt in jeder Screen-Komponente über
+// `useThemeColors()` neu berechnet, sobald sich `useColorScheme()` ändert.
+function useThemeColors() {
+  const isDarkMode = useColorScheme() === 'dark';
+  return useMemo(
+    () => ({
+      isDarkMode,
+      background: isDarkMode ? '#121212' : '#fff',
+      text: isDarkMode ? '#f2f2f2' : '#111',
+      textMuted: isDarkMode ? '#aaaaaa' : '#666',
+      textSubtle: isDarkMode ? '#bbbbbb' : '#555',
+      chipText: isDarkMode ? '#e5e5e5' : '#333',
+      border: isDarkMode ? '#555' : '#ccc',
+      borderSubtle: isDarkMode ? '#333' : '#eee',
+      inputBackground: isDarkMode ? '#1e1e1e' : '#fff',
+      previewBackground: isDarkMode ? '#1e1e1e' : '#f2f2f2',
+      placeholder: isDarkMode ? '#888' : '#999',
+    }),
+    [isDarkMode],
+  );
+}
+
+function getStyles(colors: ReturnType<typeof useThemeColors>) {
+  return StyleSheet.create({
+    appContainer: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    tabBar: {
+      flexDirection: 'row',
+      paddingHorizontal: 20,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderSubtle,
+    },
+    tabButton: {
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 16,
+      marginRight: 8,
+    },
+    tabButtonActive: {
+      backgroundColor: '#2563eb',
+    },
+    tabText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSubtle,
+    },
+    tabTextActive: {
+      color: '#fff',
+    },
+    title: {
+      fontSize: 18,
+      fontWeight: '600',
+      marginBottom: 8,
+      color: colors.text,
+    },
+    status: {
+      fontSize: 14,
+      color: colors.textMuted,
+      marginBottom: 16,
+    },
+    receiptPreview: {
+      width: '100%',
+      height: 260,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 16,
+      backgroundColor: colors.previewBackground,
+    },
+    progressRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: -8,
+      marginBottom: 16,
+    },
+    progressTrack: {
+      flex: 1,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.borderSubtle,
+      overflow: 'hidden',
+    },
+    progressLabel: {
+      fontSize: 12,
+      color: colors.textMuted,
+      marginLeft: 8,
+      minWidth: 34,
+      textAlign: 'right',
+    },
+    progressFill: {
+      height: '100%',
+      borderRadius: 4,
+      backgroundColor: '#2563eb',
+    },
+    buttonRow: {
+      flexDirection: 'row',
+      marginTop: 16,
+      marginBottom: 24,
+    },
+    buttonWrapper: {
+      marginRight: 12,
+    },
+    label: {
+      fontSize: 13,
+      fontWeight: '600',
+      marginTop: 12,
+      color: colors.text,
+    },
+    input: {
+      fontSize: 14,
+      marginTop: 4,
+      minHeight: 44,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 6,
+      padding: 8,
+      textAlignVertical: 'top',
+      color: colors.text,
+      backgroundColor: colors.inputBackground,
+    },
+    response: {
+      fontSize: 14,
+      marginTop: 4,
+      color: colors.text,
+    },
+    errorText: {
+      fontSize: 13,
+      color: DANGER_COLOR,
+      marginTop: 8,
+    },
+    lowConfidenceBorder: {
+      borderColor: CAUTION_COLOR,
+      borderWidth: 2,
+    },
+    needsInputBorder: {
+      borderColor: DANGER_COLOR,
+      borderWidth: 2,
+    },
+    needsInputHint: {
+      fontSize: 12,
+      color: DANGER_COLOR,
+      marginTop: 4,
+    },
+    warningBox: {
+      borderWidth: 2,
+      borderRadius: 6,
+      padding: 10,
+      marginTop: 8,
+    },
+    warningText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    lineItemRow: {
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+      borderRadius: 6,
+      padding: 8,
+      marginTop: 4,
+    },
+    lineItemDescription: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    lineItemMeta: {
+      fontSize: 12,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    segmentRow: {
+      flexDirection: 'row',
+      marginTop: 4,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 6,
+      overflow: 'hidden',
+    },
+    segmentButton: {
+      flex: 1,
+      paddingVertical: 10,
+      alignItems: 'center',
+    },
+    segmentButtonActive: {
+      backgroundColor: '#2563eb',
+    },
+    segmentText: {
+      fontSize: 14,
+      color: colors.chipText,
+    },
+    segmentTextActive: {
+      color: '#fff',
+      fontWeight: '600',
+    },
+    chipContainer: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      marginTop: 4,
+      padding: 4,
+      borderWidth: 1,
+      borderColor: 'transparent',
+      borderRadius: 6,
+    },
+    chip: {
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginRight: 8,
+      marginBottom: 8,
+    },
+    chipSelected: {
+      backgroundColor: '#2563eb',
+      borderColor: '#2563eb',
+    },
+    chipText: {
+      fontSize: 13,
+      color: colors.chipText,
+    },
+    chipTextSelected: {
+      color: '#fff',
+      fontWeight: '600',
+    },
+  });
+}
 
 export default App;
