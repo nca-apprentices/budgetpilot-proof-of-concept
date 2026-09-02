@@ -18,8 +18,8 @@
     "react-native-calendars": "^1.1314.0",
     "react-native-fs": "^2.20.0",
     "react-native-image-picker": "^8.2.1",
-    "react-native-litert-lm": "^0.6.1",
-    "react-native-nitro-modules": "^0.36.5",
+    "react-native-litert-lm": "^0.7.0",
+    "react-native-nitro-modules": "^0.37.1",
     "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
@@ -48,6 +48,6 @@
   },
   "allowScripts": {
     "fsevents@2.3.3": true,
-    "react-native-litert-lm@0.6.1": true
+    "react-native-litert-lm@0.7.0": true
   }
 }
