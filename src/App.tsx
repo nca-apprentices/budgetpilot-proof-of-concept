@@ -112,6 +112,16 @@ Antwort:`;
 function buildReceiptOcrExtractionPrompt(ocrText: string): string {
   return `Du bist ein Extraktions-Assistent für die Budget-App BudgetPilot. Der folgende Text wurde per OCR aus einem fotografierten Kassenzettel/Beleg erkannt (Zeilenumbrüche und Layout können durcheinander sein). Finde den Gesamtbetrag (meist bei "TOTAL") und die Art der Ausgabe, und antworte AUSSCHLIESSLICH mit einem einzelnen JSON-Objekt — keine Erklärung, kein Markdown, kein Codeblock.
 
+Manche Belege zeigen bei Kartenzahlung ZWEI Totale in unterschiedlichen Währungen (Fremdwährungs-Umrechnung/Dynamic Currency Conversion, z.B. eine Zeile "Total in EUR"/"Local currency ..." zusätzlich zum eigentlichen CHF-Betrag). Verwende in diesem Fall IMMER den CHF-Betrag, nicht die umgerechnete Fremdwährung.
+
+Bei Barzahlung stehen oft ZUSÄTZLICH zum Gesamtbetrag noch der gegebene Bargeld-Betrag (Zeile "BAR" o.Ä.) und das Wechselgeld (Zeile "Zurück") auf dem Beleg. Verwende IMMER den Betrag bei "TOTAL", NIEMALS den Bargeld-/Wechselgeld-Betrag — der gegebene Bargeld-Betrag ist praktisch immer höher als der tatsächliche Kaufbetrag.
+
+Beispiel für genau diesen Fall — ein OCR-Text enthält u.a. diese drei Zeilen:
+TOTAL CHF 24.50
+BAR 30.00
+Zurück CHF -5.50
+Der korrekte Betrag ist hier 24.50 (bei "TOTAL"). NICHT 30.00 (nur das gegebene Bargeld) und NICHT 5.50/-5.50 (nur das Wechselgeld).
+
 ${extractionSchemaInstructions()}
 
 OCR-Text:
@@ -120,6 +130,26 @@ ${ocrText}
 """
 
 Antwort:`;
+}
+
+// Sucht deterministisch die erste "TOTAL <Währung> <Betrag>"-Stelle im
+// OCR-Text und nutzt sie als verlässlichen Betrag — statt das Modell frei
+// zwischen mehreren echten Zahlen (Bargeld, Wechselgeld, Fremdwährungs-
+// Umrechnung, Mengenangaben, Rabatt-Summen) wählen zu lassen, was sich
+// wiederholt als unzuverlässig erwiesen hat, auch mit expliziten
+// Anweisungen/Beispielen im Prompt (siehe CLAUDE.md Lessons Learned). Nutzt
+// aus, dass der eigentliche Kaufbetrag auf Schweizer Kassenzetteln praktisch
+// immer VOR sekundären Zeilen wie Bargeld/Wechselgeld oder einer
+// Fremdwährungs-Umrechnung steht — deshalb reicht das erste Vorkommen.
+// Verlangt einen Währungscode direkt nach "TOTAL" (kein reines "\d" davor
+// erlaubt), damit z.B. "Sie sparen total 2.23" (Rabatt-Summe ohne
+// Währungscode) NICHT fälschlich als Gesamtbetrag erkannt wird. Gibt null
+// zurück, wenn kein eindeutiges "TOTAL <Währung> <Betrag>" gefunden wird
+// (z.B. bei ungewöhnlichen Belegen), dann bleibt es beim vom Modell
+// gelieferten Betrag als Fallback.
+function findTotalAmountInOcrText(ocrText: string): number | null {
+  const match = ocrText.match(/\bTOTAL\b\s*(?:CHF|EUR|USD|GBP)\s*(\d+[.,]\d{2})/i);
+  return match ? parseAmount(match[1]) : null;
 }
 
 function buildSummaryPrompt(
@@ -282,6 +312,23 @@ function App() {
     // "gemma-4-E2B-it.litertlm" würde sie ohnehin nicht greifen). Siehe
     // Lessons Learned in CLAUDE.md zum früheren Multimodal-Bug mit Gemma 3 1B-IT.
     multimodal: true,
+    // Laut react-native-litert-lm-Typdefinitionen ist thinking bereits
+    // standardmässig aktiv — hier trotzdem explizit gesetzt, um uns nicht auf
+    // den impliziten Default zu verlassen. Getestet gegen den direkten
+    // Bild-Pfad (wie Google AI Edge Gallery): hat dort NICHT geholfen (siehe
+    // CLAUDE.md Lessons Learned) — bleibt trotzdem an, da es dem
+    // Text-Extraktionsschritt der OCR-Pipeline plausibel beim Auflösen von
+    // OCR-Mehrdeutigkeiten (z.B. mehrspaltige Belege) helfen kann.
+    //
+    // tokenBudget war ursprünglich -1 (unbegrenzt) — das hat bei einem
+    // komplexeren Beleg (viele Artikel) dazu geführt, dass das Modell sein
+    // gesamtes maxOutputTokens-Budget (Default 1024) mit Denken aufgebraucht
+    // hat, ohne je zur JSON-Antwort zu kommen ("Keine JSON-Antwort im
+    // Modell-Output gefunden", siehe CLAUDE.md Lessons Learned). Fix:
+    // Denk-Budget gedeckelt UND maxOutputTokens erhöht, damit nach dem
+    // Denken sicher noch Platz für die eigentliche Antwort bleibt.
+    thinking: { enabled: true, tokenBudget: 512 },
+    maxOutputTokens: 2048,
   });
   const [screen, setScreen] = useState<Screen>('expense');
   const [income, setIncome] = useState<number | null>(null);
@@ -436,7 +483,17 @@ function ExpenseFlow({
       const result = await generate(buildReceiptOcrExtractionPrompt(ocrText));
       console.log('[extraction-photo] Antwort:', result);
       const raw = extractJsonObject(result);
-      setDraft(buildDraftFromRaw(raw));
+      const photoDraft = buildDraftFromRaw(raw);
+      // Betrag/Währung deterministisch überschreiben, falls die "TOTAL"-Zeile
+      // im OCR-Text eindeutig gefunden wurde — zuverlässiger als das Modell
+      // selbst zwischen mehreren echten Zahlen wählen zu lassen (siehe
+      // findTotalAmountInOcrText und CLAUDE.md Lessons Learned).
+      const totalHint = findTotalAmountInOcrText(ocrText);
+      if (totalHint !== null) {
+        photoDraft.amount = totalHint;
+        photoDraft.currency = 'CHF';
+      }
+      setDraft(photoDraft);
       setDraftInitialDate(prefilledDate ?? todayIso());
       onPrefilledDateConsumed();
       setDraftSource('photo');

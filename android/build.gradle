@@ -1,7 +1,10 @@
 buildscript {
     ext {
         buildToolsVersion = "37.0.0"
-        minSdkVersion = 24
+        // react-native-litert-lm braucht mindestens API 26 (siehe manifest
+        // merger error beim ersten Android-Build) — Ziel-Gerät Galaxy S21 FE
+        // läuft mit Android 12 (API 31), also unproblematisch.
+        minSdkVersion = 26
         compileSdkVersion = 37
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"
