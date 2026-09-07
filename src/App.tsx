@@ -278,6 +278,53 @@ function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Aufräum-Hilfsfunktionen für die nach RNFS.DocumentDirectoryPath kopierten
+// Beleg-Fotos (siehe processBelegUri) — dieser Ordner wird von Android/iOS
+// NICHT automatisch bereinigt (bewusst, siehe CLAUDE.md Lessons Learned zum
+// CachesDirectoryPath-Bug), daher braucht es eigene Lösch-Logik, damit sich
+// dort nicht unbegrenzt Datei-Leichen ansammeln.
+const BELEG_FILE_PREFIX = 'beleg-';
+
+async function listBelegFiles() {
+  try {
+    const entries = await RNFS.readDir(RNFS.DocumentDirectoryPath);
+    return entries.filter(entry => entry.isFile() && entry.name.startsWith(BELEG_FILE_PREFIX));
+  } catch (e) {
+    console.error('[beleg-cleanup] Verzeichnis konnte nicht gelesen werden:', e);
+    return [];
+  }
+}
+
+// Löschen darf den eigentlichen Foto-Erfassungs-Flow nie blockieren oder zum
+// Absturz bringen — die Datei könnte bereits gelöscht sein oder nie
+// existiert haben, das ist unkritisch.
+async function deleteBelegFile(path: string): Promise<void> {
+  try {
+    await RNFS.unlink(path);
+  } catch {
+    // Absichtlich ignoriert, siehe Kommentar oben.
+  }
+}
+
+// Vor jedem neuen Beleg-Foto alle bisherigen löschen: pro Zeitpunkt ist immer
+// nur ein Entwurf aktiv (siehe CLAUDE.md Status, "bewusst ohne Persistenz"),
+// eine übrig gebliebene ältere Kopie kann also nur von einem vorherigen
+// Absturz/Fast-Refresh-Reload stammen.
+async function cleanupAllBelegFiles(): Promise<void> {
+  const files = await listBelegFiles();
+  await Promise.all(files.map(file => deleteBelegFile(file.path)));
+}
+
+// Sicherheitsnetz beim App-Start (siehe App()): fängt Datei-Leichen ab, falls
+// das Löschen beim Verwerfen/Bestätigen (handleVerwerfen/handleBestaetigen)
+// mal durch einen Absturz übersprungen wurde.
+async function cleanupOldBelegFiles(maxAgeMs: number): Promise<void> {
+  const files = await listBelegFiles();
+  const cutoff = Date.now() - maxAgeMs;
+  const stale = files.filter(file => file.mtime !== undefined && file.mtime.getTime() < cutoff);
+  await Promise.all(stale.map(file => deleteBelegFile(file.path)));
+}
+
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -353,6 +400,13 @@ function App() {
   const [prefilledDate, setPrefilledDate] = useState<string | null>(null);
 
   const addItem = (item: LineItem) => setItems(prev => [...prev, item]);
+
+  // Sicherheitsnetz: fängt liegen gebliebene Beleg-Foto-Kopien ab, falls das
+  // Löschen beim Verwerfen/Bestätigen mal durch einen Absturz oder
+  // Fast-Refresh-Reload übersprungen wurde (siehe cleanupOldBelegFiles).
+  useEffect(() => {
+    cleanupOldBelegFiles(24 * 60 * 60 * 1000);
+  }, []);
 
   return (
     <SafeAreaProvider>
@@ -505,6 +559,11 @@ function ExpenseFlow({
       // installd, ca. alle 60s beobachtet) automatisch älteste Dateien
       // purgt — inklusive unserer gerade erst kopierten Beleg-Datei, bevor
       // der Entwurf-Screen sie anzeigen konnte (bestätigt per Logcat).
+      // Alte Beleg-Kopien zuerst löschen (siehe cleanupAllBelegFiles) — sonst
+      // sammeln sich in DocumentDirectoryPath unbegrenzt Dateien an, da
+      // dieser Ordner (bewusst, anders als CachesDirectoryPath) nicht vom OS
+      // automatisch bereinigt wird.
+      await cleanupAllBelegFiles();
       const persistentPath = `${RNFS.DocumentDirectoryPath}/beleg-${Date.now()}.jpg`;
       await RNFS.copyFile(uri.replace('file://', ''), persistentPath);
       const persistentUri = `file://${persistentPath}`;
@@ -579,6 +638,11 @@ function ExpenseFlow({
   };
 
   const handleVerwerfen = () => {
+    // Zugehöriges Beleg-Foto sofort löschen, statt bis zum nächsten
+    // Foto-Erfassungsvorgang zu warten (siehe cleanupAllBelegFiles).
+    if (draftPhotoUri) {
+      deleteBelegFile(draftPhotoUri.replace('file://', ''));
+    }
     setDraft(null);
     setDraftPhotoUri(null);
     setStep('entry');
@@ -599,6 +663,11 @@ function ExpenseFlow({
     };
     console.log('[expense] Bestätigt:', item);
     onConfirmItem(item);
+    // Zugehöriges Beleg-Foto wird nach dem Bestätigen nicht mehr gebraucht
+    // (siehe cleanupAllBelegFiles) — nur zur Anzeige im Entwurf-Screen nötig.
+    if (draftPhotoUri) {
+      deleteBelegFile(draftPhotoUri.replace('file://', ''));
+    }
     setDraft(null);
     setDraftPhotoUri(null);
     setText('');
