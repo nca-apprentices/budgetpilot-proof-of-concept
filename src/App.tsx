@@ -55,6 +55,12 @@ import RNFS from 'react-native-fs';
 import { recognizeReceiptText } from './receiptOcr';
 import { pickBestMatch, searchToppreise, type PriceResult } from './toppreise';
 import {
+  GOLDEN_SET,
+  compareToExpected,
+  type GoldenSetCase,
+  type GoldenSetComparison,
+} from './goldenSet';
+import {
   addLineItems,
   getMonth,
   incomeToCents,
@@ -1697,6 +1703,19 @@ function PriceSearchScreen({ model }: { model: UseModelResult }) {
   );
 }
 
+type GoldenRunResult = {
+  case: GoldenSetCase;
+  actual: Draft | null;
+  comparison: GoldenSetComparison;
+};
+
+const FAILED_COMPARISON: GoldenSetComparison = {
+  amountCorrect: false,
+  categoryCorrect: false,
+  cadenceCorrect: false,
+  allCorrect: false,
+};
+
 function LlmTestScreen({ model }: { model: UseModelResult }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1705,6 +1724,9 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
     model;
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [response, setResponse] = useState<string | null>(null);
+  const [isRunningGoldenSet, setIsRunningGoldenSet] = useState(false);
+  const [goldenSetProgress, setGoldenSetProgress] = useState(0);
+  const [goldenResults, setGoldenResults] = useState<GoldenRunResult[] | null>(null);
 
   const runTest = async () => {
     setResponse(null);
@@ -1724,6 +1746,53 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
     setPrompt('');
     setResponse(null);
   };
+
+  // Läuft alle GOLDEN_SET-Fälle nacheinander über denselben Extraktionspfad
+  // wie der echte Freitext-Flow (buildExtractionPrompt), statt sie einzeln
+  // von Hand einzutippen — siehe CLAUDE.md Testplan/Lessons Learned. Jeder
+  // Fall bekommt ein eigenes try/catch, damit ein einzelner Parse-Fehler
+  // nicht den ganzen Durchlauf abbricht und die restlichen Ergebnisse
+  // verschluckt.
+  const runGoldenSet = async () => {
+    setIsRunningGoldenSet(true);
+    setGoldenResults(null);
+    const results: GoldenRunResult[] = [];
+    for (let i = 0; i < GOLDEN_SET.length; i++) {
+      const testCase = GOLDEN_SET[i];
+      setGoldenSetProgress(i);
+      try {
+        reset();
+        const raw = await generate(buildExtractionPrompt(testCase.input));
+        const actual = buildDraftFromRaw(extractJsonObject(raw));
+        results.push({
+          case: testCase,
+          actual,
+          comparison: compareToExpected(testCase.expected, actual),
+        });
+      } catch (e) {
+        console.error(`[golden-set] Fall "${testCase.id}" fehlgeschlagen:`, e);
+        results.push({ case: testCase, actual: null, comparison: FAILED_COMPARISON });
+      }
+    }
+    setGoldenResults(results);
+    setIsRunningGoldenSet(false);
+  };
+
+  const goldenSummary = useMemo(() => {
+    if (!goldenResults) {
+      return null;
+    }
+    const total = goldenResults.length;
+    const count = (pick: (r: GoldenRunResult) => boolean) =>
+      goldenResults.filter(pick).length;
+    return {
+      total,
+      allCorrect: count(r => r.comparison.allCorrect),
+      amountCorrect: count(r => r.comparison.amountCorrect),
+      categoryCorrect: count(r => r.comparison.categoryCorrect),
+      cadenceCorrect: count(r => r.comparison.cadenceCorrect),
+    };
+  }, [goldenResults]);
 
   let status = 'Modell wird geladen…';
   if (error) status = `Fehler beim Laden: ${error}`;
@@ -1758,7 +1827,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
           <Button
             title={isGenerating ? 'Läuft…' : 'Test ausführen'}
             onPress={runTest}
-            disabled={!isReady || isGenerating || prompt.trim().length === 0}
+            disabled={!isReady || isGenerating || isRunningGoldenSet || prompt.trim().length === 0}
           />
         </View>
         <View style={styles.buttonWrapper}>
@@ -1766,7 +1835,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
             title="Zurücksetzen"
             onPress={clear}
             disabled={
-              isGenerating || (prompt.length === 0 && response === null)
+              isGenerating || isRunningGoldenSet || (prompt.length === 0 && response === null)
             }
           />
         </View>
@@ -1774,6 +1843,57 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
 
       <Text style={styles.label}>Antwort:</Text>
       <Text style={styles.response}>{response ?? '—'}</Text>
+
+      <Text style={styles.title}>Golden Set</Text>
+      <Text style={styles.status}>
+        {GOLDEN_SET.length} Testfälle mit erwarteten Werten (Betrag, Kategorie, Häufigkeit) —
+        siehe src/goldenSet.ts.
+      </Text>
+
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title={
+              isRunningGoldenSet
+                ? `Läuft… (${goldenSetProgress + 1}/${GOLDEN_SET.length})`
+                : 'Golden Set ausführen'
+            }
+            onPress={runGoldenSet}
+            disabled={!isReady || isGenerating || isRunningGoldenSet}
+          />
+        </View>
+      </View>
+
+      {goldenSummary && (
+        <>
+          <Text style={styles.label}>
+            {goldenSummary.allCorrect}/{goldenSummary.total} komplett korrekt
+          </Text>
+          <Text style={styles.status}>
+            Betrag: {goldenSummary.amountCorrect}/{goldenSummary.total} · Kategorie:{' '}
+            {goldenSummary.categoryCorrect}/{goldenSummary.total} · Häufigkeit:{' '}
+            {goldenSummary.cadenceCorrect}/{goldenSummary.total}
+          </Text>
+          {goldenResults!.map(result => (
+            <View key={result.case.id} style={styles.lineItemRow}>
+              <Text style={styles.lineItemDescription}>
+                {result.comparison.allCorrect ? '✅' : '❌'} {result.case.input}
+              </Text>
+              <Text style={styles.lineItemMeta}>
+                Erwartet: {result.case.expected.amount.toFixed(2)} {result.case.expected.currency} ·{' '}
+                {result.case.expected.category} ·{' '}
+                {result.case.expected.cadence === 'monthly' ? 'monatlich' : 'einmalig'}
+              </Text>
+              <Text style={styles.lineItemMeta}>
+                Erhalten:{' '}
+                {result.actual
+                  ? `${result.actual.amount !== null ? result.actual.amount.toFixed(2) : '—'} ${result.actual.currency} · ${result.actual.category ?? 'needs_input'} · ${result.actual.cadence === 'monthly' ? 'monatlich' : 'einmalig'}`
+                  : 'Fehler bei der Auswertung'}
+              </Text>
+            </View>
+          ))}
+        </>
+      )}
     </ScrollView>
   );
 }

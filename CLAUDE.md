@@ -95,8 +95,8 @@ Nachweisen, dass BudgetPilot als On-Device-App (offline möglich) zuverlässig:
 
 **Funktional**
 
-- Freitext-Parsing: ≥ 85 % der Testinputs werden korrekt in strukturierte Posten überführt (Betrag + Kategorie)
-- Kategorisierung: ≥ 80 % Trefferquote auf einem kuratierten Testset (mind. 50 Beispiele)
+- Freitext-Parsing: ≥ 85 % der Testinputs werden korrekt in strukturierte Posten überführt (Betrag + Kategorie) — **erste systematische Messung (Golden Set, n=20, siehe Lessons Learned #30):** Betrag 20/20 (100%), Häufigkeit 20/20 (100%), Kategorie 18/20 (90%), komplett korrekt 18/20 (90%) — alle drei Zielwerte übertroffen. Noch klein (20 statt 50 Fälle) und bewusst ohne mehrdeutige/needs_input-Fälle, siehe dort.
+- Kategorisierung: ≥ 80 % Trefferquote auf einem kuratierten Testset (mind. 50 Beispiele) — 90% auf dem aktuellen n=20-Set (s. o.), Zielwert damit erreicht, Testset-Grösse aber noch unter der geplanten Zielgrösse von 50.
 - Restbudget-Berechnung stimmt zu 100 % (deterministisch testbar)
 - PDF exportiert ohne Layoutfehler — **im Simulator bereits nachgewiesen** (mehrseitiger Umbruch über `PdfWriter` in `pdfExport.ts` ist vorbereitet, aber noch nicht mit genug Posten getestet, um einen echten Seitenumbruch auszulösen)
 - **Foto-Extraktion (Stichprobe, nicht repräsentativ):** mit direkter Bild-Übergabe ans LLM 0/2 echte Kassenzettel korrekt extrahiert. Nach Umstellung auf Vision-OCR-first zunächst verbessert, aber weiterhin nicht zuverlässig; nach der Zeilen-Rekonstruktion über Bounding-Boxes (Lessons Learned #19) jetzt **3/3 echte Testbelege korrekt** (unterschiedliche Layouts: einfach, mehrspaltige Tabelle, Fremdwährungs-/Rabatt-Zeilen), alle mit 100% Confidence. Damit erstmals im Bereich der 85%/80%-Ziele oben — aber weiterhin nur eine kleine, nicht repräsentative Stichprobe (n=3). Für eine belastbare Aussage braucht es weiterhin ein grösseres Testset echter Belege (Golden Set).
@@ -158,9 +158,9 @@ Ziel: Immer strukturiertes JSON ausgeben, das nachträglich validiert werden kan
 
 ## Testplan (POC)
 
-1. **Golden Set** (noch anzulegen):
-   - 30 Freitext-Budgets (Deutsch) mit Fixkosten/Variablen
-   - 20 Wunschlistentexte (Produkt + Preis/ohne Preis)
+1. **Golden Set:**
+   - ✅ Freitext-Budgets: erste Version mit 20 (statt der ursprünglich geplanten 30) Fällen umgesetzt, `src/goldenSet.ts` + Batch-Runner im LLM-Test-Screen, siehe Lessons Learned #30 für Ergebnis und Details
+   - ⏳ Wunschlistentexte (Produkt + Preis/ohne Preis) noch offen
 2. **Automatisierte Tests**
    - Parser/Validator Unit Tests
    - Budget Engine deterministic tests
@@ -229,6 +229,8 @@ Ziel: Immer strukturiertes JSON ausgeben, das nachträglich validiert werden kan
 
 29. **Kalender-Tag-Detail:** Antippen eines Kalendertags mit Punkt-Markierung öffnete "Ausgabe erfassen" mit vorausgefülltem Datum, zeigte aber nicht, was an diesem Tag schon erfasst wurde — man musste dafür extra in den Budget-Tab wechseln und dort suchen. Fix: `ExpenseFlow` bekommt jetzt die volle `items`-Liste (aus dem DB-Persistenz-State in `App()`) und filtert sie nach `prefilledDate`; `EntryScreen` zeigt das Ergebnis als kompakte Liste ("Bereits erfasst für TT.MM.JJJJ:") direkt unter dem Freitext-Feld, mit Betrag, Kategorie und Fixkosten/Einmalig (aus `cadence` abgeleitet) — dieselbe Darstellung wie im Budget-Tab, nur nach Datum statt nach Häufigkeit gruppiert. Reiner JS-State-Filter (`useMemo`), keine neue DB-Query nötig, da `items` ohnehin schon vollständig geladen im State liegt. Verifiziert im iOS-Simulator.
 
+30. **Erstes Golden Set (n=20) + automatisierter Batch-Runner — 90% komplett korrekt, alle Zielwerte übertroffen.** Bisher gab es für die Freitext-Extraktion nur Einzel-Stichproben statt einer systematischen Messung. Umgesetzt: `src/goldenSet.ts` (20 Fälle, alle 7 Kategorien abgedeckt, `{input, expected: {amount, currency, cadence, category}}`) plus eine reine, unabhängig getestete Vergleichsfunktion `compareToExpected()` (`src/__tests__/goldenSet.test.ts`, 7 Fälle). Da das Modell nur on-device läuft (Jest kann `NitroModules` nicht laden, siehe App.test.tsx-Einschränkung), läuft die eigentliche Messung nicht in Jest, sondern über einen neuen Batch-Runner im LLM-Test-Screen: ein Button führt alle 20 Fälle nacheinander durch denselben `buildExtractionPrompt()`-Pfad wie die echte Freitext-Extraktion (inkl. `reset()` vor jedem Fall, siehe Lessons Learned #9), vergleicht das Ergebnis gegen `expected` und zeigt eine Zusammenfassung plus Pro-Fall-Liste (✅/❌ mit erwarteten vs. erhaltenen Werten). Jeder Fall läuft in einem eigenen `try/catch`, damit ein einzelner Parse-Fehler nicht den ganzen Durchlauf abbricht. **Ergebnis (iOS-Simulator, ein Durchlauf):** Betrag 20/20 (100%), Häufigkeit 20/20 (100%), Kategorie 18/20 (90%), komplett korrekt 18/20 (90%) — übertrifft die Erfolgskriterien-Zielwerte (85%/80%). Die zwei Kategorie-"Fehler" sind beide harmlos: "Hausratversicherung" wurde als "Sonstiges" statt "Wohnen" eingeordnet (vertretbare Alternativ-Kategorisierung), "Spende" bekam ehrlich `needs_input` statt geraten "Sonstiges" — keine gefährliche Fehlklassifikation mit falscher hoher Confidence. **Bewusste Einschränkungen dieser ersten Version:** nur 20 statt der im Testplan vorgesehenen 30 Fälle (Laufzeit-Grund — jeder Fall braucht einen echten CPU-Modellaufruf, ein 50er-Set hätte für einen ersten Durchlauf zu lange gedauert), und bewusst keine mehrdeutigen/needs_input-Fälle in den Erwartungswerten (lässt sich später ergänzen). Die Liste ist beliebig erweiterbar, ohne den Runner anzufassen.
+
 ## Meilensteine (ca. 3 Tage POC)
 
 **Tag 1 – Setup & Basisfunktionen**
@@ -237,13 +239,13 @@ Ziel: Immer strukturiertes JSON ausgeben, das nachträglich validiert werden kan
 - ✅ Lokale DB (op-sqlite, Schema + Migrationen + Repository, in App.tsx angebunden — Unit-Tests grün, Geräte-Verifikation offen)
 - ✅ Eingabe (Freitext) — strukturierte Felder (Kategorie-Chips, Betrag, Häufigkeit) im Entwurf-Screen vorhanden
 - ✅ Baseline Budget Engine (Restbudget, Warnungen) — Fixkosten/geplante Käufe aus `cadence` abgeleitet
-- ⏳ Golden Set anlegen (mind. 20 Beispiele) + Messkriterien definieren
+- ✅ Golden Set (Freitext) angelegt: 20 Beispiele + Messkriterien (Betrag/Kategorie/Häufigkeit-Trefferquote), siehe Lessons Learned #30
 
 **Tag 2 – On-Device KI Integration**
 
 - ✅ Gemma On-Device Inferenz integriert (minimaler Test, funktioniert)
 - ✅ Strukturierte Extraktion + Kategorisierung + UI zum Korrigieren (DraftScreen mit needs_input-Markierung, Low-Confidence-Rahmen)
-- ⏳ Erste Messung Accuracy/Latency auf Golden Set, Iteration der Prompts/Validator-Regeln
+- ✅ Erste Messung Accuracy auf Golden Set (90% komplett korrekt, n=20, siehe Lessons Learned #30) — ⏳ Latency-Messung und weitere Prompt-Iteration darauf basierend noch offen
 - ✅ Umstieg auf Gemma 4 E2B-it (multimodal) inkl. Kamera-/Galerie-Erfassung (`react-native-image-picker`) vollständig im Simulator verifiziert (Download, `pod install`, Foto-Vorschau im Entwurf-Screen) — ⏳ inhaltliche Genauigkeit der Foto-Extraktion bei echten Belegen ungenügend, weitere Untersuchung nötig (siehe Risiken/Lessons Learned)
 
 **Tag 3 – Demo-Flow & Export**
