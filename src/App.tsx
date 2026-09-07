@@ -1,16 +1,19 @@
 /**
  * BudgetPilot — On-Device-LLM-Test (react-native-litert-lm) + Ausgabenerfassung.
  *
- * Lädt Gemma 4 E2B-it (multimodal: Text + Vision + Audio) und stellt vier
+ * Lädt Gemma 4 E2B-it (multimodal: Text + Vision + Audio) und stellt fünf
  * Tabs bereit:
  * - "Ausgabe erfassen": Freitext ODER Beleg-Foto → KI-Extraktion → Entwurf
  *   zum Bestätigen, bevor irgendwas gespeichert wird.
  * - "Budget": Einkommen, bestätigte Posten, Restbudget + Warnungen.
  * - "Kalender": Monatsansicht, Antippen eines Tages öffnet "Ausgabe
  *   erfassen" mit dem Datum vorausgefüllt.
+ * - "Preise": Freitext → Suchbegriff (KI) → Preisabruf toppreise.ch.
  * - "LLM-Test": freier Prompt ans Modell, fürs Golden-Set-Testen.
  *
- * Absichtlich ohne echte Persistenz — siehe models/README.md.
+ * Bestätigte Posten und das Einkommen liegen in einer lokalen SQLite-Datenbank
+ * (siehe src/db/) und überleben einen App-Neustart. Der Entwurf selbst wird
+ * bewusst nicht gespeichert — erst "Bestätigen" schreibt.
  *
  * @format
  */
@@ -21,6 +24,7 @@ import {
   Animated,
   Button,
   Image,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -49,6 +53,20 @@ import { computeBudget } from './budgetEngine';
 import { buildBudgetReportPdf, savePdfAndShare } from './pdfExport';
 import RNFS from 'react-native-fs';
 import { recognizeReceiptText } from './receiptOcr';
+import { pickBestMatch, searchToppreise, type PriceResult } from './toppreise';
+import {
+  addLineItems,
+  getMonth,
+  incomeToCents,
+  incomeToChf,
+  initDatabase,
+  listLineItems,
+  monthOfDate,
+  setIncomeCents,
+  toNewLineItem,
+  toUiLineItem,
+  type SqlDatabase,
+} from './db';
 
 // Öffentliche HuggingFace-URL (kein Login/Lizenz-Klick nötig, anders als das
 // vorherige Gemma-3-1B-IT-Setup). react-native-litert-lm lädt die Datei beim
@@ -200,6 +218,38 @@ Restbudget: ${
 Formuliere daraus einen kurzen, freundlichen Fliesstext (2-3 Sätze) auf Deutsch für den Nutzer. Antworte NUR mit diesem Fliesstext — keine Anführungszeichen, keine Überschrift, kein JSON, kein Markdown.
 
 Antwort:`;
+}
+
+/**
+ * Wandelt eine umgangssprachliche Produktbeschreibung in einen knappen
+ * Suchbegriff für toppreise.ch um ("brauche neue kabellose Sony Kopfhörer
+ * xm5" → "Sony WH-1000XM5"). Das Modell liefert NUR den Suchbegriff — den
+ * Preis holt danach deterministischer Code, nie das Modell (siehe CLAUDE.md
+ * Lessons Learned zu erfundenen Zahlen).
+ */
+function buildProductQueryPrompt(userText: string): string {
+  return `Du hilfst bei einer Produktsuche auf dem Schweizer Preisvergleich toppreise.ch. Wandle die folgende Beschreibung in einen kurzen Suchbegriff um: Marke und Modellbezeichnung, keine Füllwörter, keine Farbe, keine Menge, kein Preis.
+
+Antworte AUSSCHLIESSLICH mit dem Suchbegriff — keine Erklärung, keine Anführungszeichen, kein Satzzeichen am Ende.
+
+Beispiel:
+Text: "ich brauche neue kabellose kopfhörer von sony, die xm5"
+Antwort: Sony WH-1000XM5
+
+Beispiel:
+Text: "eine günstige waschmaschine von bosch"
+Antwort: Bosch Waschmaschine
+
+Text: "${userText}"
+Antwort:`;
+}
+
+/** Das Modell hängt gern Erklärungen oder Anführungszeichen an — nur die erste Zeile zählt. */
+function cleanProductQuery(raw: string): string {
+  return (raw.split('\n').find(line => line.trim().length > 0) ?? '')
+    .replace(/^["'`\s]+|["'`\s.]+$/g, '')
+    .slice(0, 80)
+    .trim();
 }
 
 function extractJsonObject(raw: string): unknown {
@@ -359,7 +409,7 @@ function findDateInText(text: string): string | null {
   return match ? parseDateDMY(match[1]) : null;
 }
 
-type Screen = 'expense' | 'budget' | 'calendar' | 'llmTest';
+type Screen = 'expense' | 'budget' | 'calendar' | 'price' | 'llmTest';
 
 function App() {
   const colors = useThemeColors();
@@ -407,8 +457,76 @@ function App() {
   // Datum, das per Antippen im Kalender vorausgewählt wurde — füllt das
   // Kaufdatum im nächsten Entwurf vor, wird danach sofort wieder geleert.
   const [prefilledDate, setPrefilledDate] = useState<string | null>(null);
+  // Erst bei 'ready' rendern wir die Tabs — sonst würde BudgetScreen sein
+  // Einkommens-Textfeld aus einem noch leeren `income` initialisieren und der
+  // geladene Wert käme nie im Feld an.
+  const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
+  const [dbError, setDbError] = useState<string | null>(null);
+  const dbRef = useRef<SqlDatabase | null>(null);
 
-  const addItem = (item: LineItem) => setItems(prev => [...prev, item]);
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const db = await initDatabase();
+        const [rows, month] = await Promise.all([
+          listLineItems(db),
+          getMonth(db, monthOfDate(todayIso())),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        dbRef.current = db;
+        setItems(rows.map(toUiLineItem));
+        setIncome(incomeToChf(month?.incomeCents ?? null));
+        setDbStatus('ready');
+      } catch (e) {
+        console.error('[db] Initialisierung fehlgeschlagen:', e);
+        if (cancelled) {
+          return;
+        }
+        setDbError(e instanceof Error ? e.message : String(e));
+        setDbStatus('error');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Optimistisch: der Posten erscheint sofort in der Liste, das Schreiben läuft
+  // daneben. Schlägt es fehl, wird er wieder entfernt — besser als eine Zeile,
+  // die der User sieht und die beim nächsten Start still verschwunden ist.
+  const addItem = (item: LineItem) => {
+    setItems(prev => [...prev, item]);
+    const db = dbRef.current;
+    if (!db) {
+      return;
+    }
+    addLineItems(db, [toNewLineItem(item)]).catch(e => {
+      console.error('[db] Posten nicht gespeichert:', e);
+      setItems(prev => prev.filter(existing => existing.id !== item.id));
+      setDbError(`"${item.description}" konnte nicht gespeichert werden.`);
+    });
+  };
+
+  const changeIncome = (next: number | null) => {
+    setIncome(next);
+    const db = dbRef.current;
+    if (!db) {
+      return;
+    }
+    setIncomeCents(db, monthOfDate(todayIso()), incomeToCents(next)).catch(
+      e => {
+        console.error('[db] Einkommen nicht gespeichert:', e);
+        setDbError('Einkommen konnte nicht gespeichert werden.');
+      },
+    );
+  };
 
   // Sicherheitsnetz: fängt liegen gebliebene Beleg-Foto-Kopien ab, falls das
   // Löschen beim Verwerfen/Bestätigen mal durch einen Absturz oder
@@ -417,11 +535,38 @@ function App() {
     cleanupOldBelegFiles(24 * 60 * 60 * 1000);
   }, []);
 
+  if (dbStatus !== 'ready') {
+    return (
+      <SafeAreaProvider>
+        <StatusBar
+          barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'}
+        />
+        <View style={[styles.appContainer, styles.dbGate]}>
+          {dbStatus === 'loading' ? (
+            <Text style={styles.status}>Datenbank wird geöffnet …</Text>
+          ) : (
+            <>
+              <Text style={styles.title}>Datenbank nicht verfügbar</Text>
+              <Text style={styles.errorText}>{dbError}</Text>
+            </>
+          )}
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'} />
       <View style={styles.appContainer}>
         <ScreenTabs screen={screen} onChange={setScreen} />
+        {dbError && (
+          <Pressable onPress={() => setDbError(null)}>
+            <Text style={styles.dbBanner}>
+              {dbError} (tippen zum Ausblenden)
+            </Text>
+          </Pressable>
+        )}
         {screen === 'expense' && (
           <ExpenseFlow
             model={model}
@@ -434,7 +579,7 @@ function App() {
           <BudgetScreen
             model={model}
             income={income}
-            onChangeIncome={setIncome}
+            onChangeIncome={changeIncome}
             items={items}
           />
         )}
@@ -447,6 +592,7 @@ function App() {
             }}
           />
         )}
+        {screen === 'price' && <PriceSearchScreen model={model} />}
         {screen === 'llmTest' && <LlmTestScreen model={model} />}
       </View>
     </SafeAreaProvider>
@@ -467,10 +613,18 @@ function ScreenTabs({
     { key: 'expense', label: 'Ausgabe erfassen' },
     { key: 'budget', label: 'Budget' },
     { key: 'calendar', label: 'Kalender' },
+    { key: 'price', label: 'Preise' },
     { key: 'llmTest', label: 'LLM-Test' },
   ];
+  // Horizontal scrollbar: ab 5 Tabs passen die Labels nicht mehr auf ein
+  // iPhone — vorher wurde "LLM-Test" am rechten Rand abgeschnitten.
   return (
-    <View style={[styles.tabBar, { paddingTop: insets.top + 12 }]}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={[styles.tabBar, { paddingTop: insets.top + 12 }]}
+      contentContainerStyle={styles.tabBarContent}
+    >
       {tabs.map(tab => (
         <Pressable
           key={tab.key}
@@ -487,7 +641,7 @@ function ScreenTabs({
           </Text>
         </Pressable>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1273,6 +1427,243 @@ function CalendarScreen({
   );
 }
 
+/**
+ * Produktsuche mit Preisvergleich.
+ *
+ * Ablauf: Freitext → Gemma normalisiert ihn zu einem Suchbegriff → toppreise.ch
+ * wird abgefragt und geparst → günstigstes Angebot des passendsten Produkts.
+ * Der Suchbegriff bleibt editierbar, weil das Modell ihn manchmal danebenlegt.
+ */
+function PriceSearchScreen({ model }: { model: UseModelResult }) {
+  const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
+  const { isReady, isGenerating, generate, reset } = model;
+
+  const [text, setText] = useState('');
+  const [searchTerm, setSearchTerm] = useState<string | null>(null);
+  const [results, setResults] = useState<PriceResult[] | null>(null);
+  const [cacheNote, setCacheNote] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const runSearch = async (query: string) => {
+    setIsSearching(true);
+    setError(null);
+    setCacheNote(null);
+    try {
+      const outcome = await searchToppreise(query);
+      setResults(outcome.results);
+      if (outcome.fromCache) {
+        setCacheNote(
+          `Offline — zwischengespeichertes Ergebnis, ca. ${outcome.cacheAgeHours} h alt.`,
+        );
+      }
+    } catch (e) {
+      console.error('[toppreise] Suche fehlgeschlagen:', e);
+      setResults(null);
+      setError(
+        e instanceof Error
+          ? `Preisabruf fehlgeschlagen: ${e.message}`
+          : 'Preisabruf fehlgeschlagen. Benötigt Internet.',
+      );
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Freitext → Suchbegriff (Modell) → Preisabruf (deterministisch).
+  const handleSuchen = async () => {
+    setError(null);
+    setResults(null);
+    let query = text.trim();
+    if (query.length === 0) {
+      return;
+    }
+    if (isReady) {
+      try {
+        // Unabhängige Einzelanfrage — ohne reset() hängt sie an der
+        // Konversationshistorie (siehe CLAUDE.md Lessons Learned).
+        reset();
+        const raw = await generate(buildProductQueryPrompt(query));
+        const cleaned = cleanProductQuery(raw);
+        if (cleaned.length > 0) {
+          query = cleaned;
+        }
+      } catch (e) {
+        // Modellfehler ist nicht fatal — wir suchen dann mit dem Rohtext.
+        console.warn('[toppreise] Normalisierung fehlgeschlagen:', e);
+      }
+    }
+    setSearchTerm(query);
+    await runSearch(query);
+  };
+
+  // Setzt den Screen auf den Ausgangszustand zurück — Eingabe, Suchbegriff,
+  // Treffer und Meldungen. Der Cache auf der Platte bleibt bewusst bestehen.
+  const handleZuruecksetzen = () => {
+    setText('');
+    setSearchTerm(null);
+    setResults(null);
+    setCacheNote(null);
+    setError(null);
+  };
+
+  const hasSomethingToClear =
+    text.length > 0 ||
+    searchTerm !== null ||
+    results !== null ||
+    error !== null ||
+    cacheNote !== null;
+
+  const best = results ? pickBestMatch(results) : null;
+  const others = results?.filter(r => r !== best) ?? [];
+
+  let status = 'Modell wird geladen…';
+  if (isGenerating) {
+    status = 'Suchbegriff wird bestimmt…';
+  } else if (isSearching) {
+    status = 'Preise werden abgefragt…';
+  } else if (isReady) {
+    status = 'Modell bereit.';
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{
+        paddingTop: 20,
+        paddingBottom: insets.bottom + 24,
+        paddingHorizontal: 20,
+      }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={styles.title}>Preise vergleichen</Text>
+      <Text style={styles.status}>{status}</Text>
+
+      <Text style={styles.label}>Produkt beschreiben:</Text>
+      <TextInput
+        style={styles.input}
+        value={text}
+        onChangeText={setText}
+        placeholder="z.B. kabellose Sony Kopfhörer xm5"
+        placeholderTextColor={colors.placeholder}
+        multiline
+      />
+
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Preis suchen"
+            onPress={handleSuchen}
+            disabled={text.trim().length === 0 || isGenerating || isSearching}
+          />
+        </View>
+        <View style={styles.buttonWrapper}>
+          <Button
+            title="Zurücksetzen"
+            onPress={handleZuruecksetzen}
+            disabled={!hasSomethingToClear || isGenerating || isSearching}
+          />
+        </View>
+      </View>
+
+      {searchTerm !== null && (
+        <>
+          <Text style={styles.label}>Gesuchter Begriff (editierbar):</Text>
+          <TextInput
+            style={styles.input}
+            value={searchTerm}
+            onChangeText={setSearchTerm}
+            placeholderTextColor={colors.placeholder}
+          />
+          <View style={styles.buttonRow}>
+            <View style={styles.buttonWrapper}>
+              <Button
+                title="Erneut suchen"
+                onPress={() => runSearch(searchTerm)}
+                disabled={searchTerm.trim().length === 0 || isSearching}
+              />
+            </View>
+          </View>
+        </>
+      )}
+
+      {error !== null && <Text style={styles.errorText}>{error}</Text>}
+
+      {cacheNote !== null && (
+        <View style={[styles.warningBox, { borderColor: CAUTION_COLOR }]}>
+          <Text style={[styles.warningText, { color: CAUTION_COLOR }]}>
+            {cacheNote}
+          </Text>
+        </View>
+      )}
+
+      {results !== null && results.length === 0 && (
+        <Text style={styles.status}>
+          Keine Treffer auf toppreise.ch für „{searchTerm}“.
+        </Text>
+      )}
+
+      {best !== null && (
+        <>
+          <Text style={styles.label}>Günstigstes Angebot:</Text>
+          {!best.matchedAllTokens && (
+            <Text style={styles.needsInputHint}>
+              Unsicherer Treffer — der Produktname enthält nicht alle
+              Suchbegriffe. Bitte prüfen.
+            </Text>
+          )}
+          <View
+            style={[
+              styles.priceCard,
+              !best.matchedAllTokens && styles.lowConfidenceBorder,
+            ]}
+          >
+            <Text style={styles.priceHero}>
+              {best.currency} {best.price.toFixed(2)}
+            </Text>
+            <Text style={styles.lineItemDescription}>{best.productName}</Text>
+            <Text style={styles.lineItemMeta}>
+              {best.offerCount !== null
+                ? `günstigstes von ${best.offerCount} Angeboten`
+                : 'günstigstes Angebot'}
+              {best.priceInclShipping !== null &&
+                ` · inkl. Versand ${
+                  best.currency
+                } ${best.priceInclShipping.toFixed(2)}`}
+            </Text>
+            <Text style={styles.link} onPress={() => Linking.openURL(best.url)}>
+              Auf toppreise.ch öffnen
+            </Text>
+          </View>
+
+          {others.length > 0 && (
+            <>
+              <Text style={styles.label}>Weitere Treffer:</Text>
+              {others.slice(0, 6).map(result => (
+                <View key={result.productId} style={styles.lineItemRow}>
+                  <Text style={styles.lineItemDescription}>
+                    {result.currency} {result.price.toFixed(2)}
+                  </Text>
+                  <Text style={styles.lineItemMeta}>{result.productName}</Text>
+                </View>
+              ))}
+            </>
+          )}
+
+          <Text style={styles.sourceNote}>
+            Preise von toppreise.ch, abgerufen am{' '}
+            {formatDateDMY(best.timestamp.slice(0, 10))}. Die Preise stammen
+            direkt von der Website — nicht von der KI. Die KI hat nur den
+            Suchbegriff formuliert.
+          </Text>
+        </>
+      )}
+    </ScrollView>
+  );
+}
+
 function LlmTestScreen({ model }: { model: UseModelResult }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1390,12 +1781,33 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       flex: 1,
       backgroundColor: colors.background,
     },
-    tabBar: {
-      flexDirection: 'row',
+    // Vollflächiger Platzhalter, solange die DB öffnet bzw. wenn sie ausfällt.
+    dbGate: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    // Schreibfehler nach dem Start: die App bleibt benutzbar, der Hinweis
+    // sitzt aber über allen Screens, damit er nicht übersehen wird.
+    dbBanner: {
+      fontSize: 13,
+      color: '#fff',
+      backgroundColor: DANGER_COLOR,
       paddingHorizontal: 20,
-      paddingBottom: 12,
+      paddingVertical: 8,
+    },
+    tabBar: {
+      // flexGrow: 0 — sonst füllt die horizontale ScrollView die ganze Höhe.
+      flexGrow: 0,
+      flexShrink: 0,
       borderBottomWidth: 1,
       borderBottomColor: colors.borderSubtle,
+    },
+    tabBarContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingBottom: 12,
     },
     tabButton: {
       paddingVertical: 6,
@@ -1525,6 +1937,31 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       borderRadius: 6,
       padding: 8,
       marginTop: 4,
+    },
+    priceCard: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      padding: 12,
+      marginTop: 8,
+    },
+    priceHero: {
+      fontSize: 28,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 4,
+    },
+    link: {
+      fontSize: 13,
+      color: colors.isDarkMode ? '#60a5fa' : '#2563eb',
+      fontWeight: '600',
+      marginTop: 8,
+    },
+    sourceNote: {
+      fontSize: 11,
+      color: colors.textMuted,
+      marginTop: 16,
+      lineHeight: 15,
     },
     lineItemDescription: {
       fontSize: 14,
