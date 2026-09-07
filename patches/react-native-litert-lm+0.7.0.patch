@@ -1,0 +1,16 @@
+diff --git a/node_modules/react-native-litert-lm/android/build.gradle b/node_modules/react-native-litert-lm/android/build.gradle
+index 9332583..35fec6c 100644
+--- a/node_modules/react-native-litert-lm/android/build.gradle
++++ b/node_modules/react-native-litert-lm/android/build.gradle
+@@ -15,7 +15,7 @@ def litertLmVersion = packageJson.litertLm.androidMavenVersion
+ 
+ android {
+     namespace "dev.litert.litertlm"
+-    compileSdk 36
++    compileSdk 37
+     
+     defaultConfig {
+         minSdk 26  // LiteRT-LM requires API 26+
+diff --git a/node_modules/react-native-litert-lm/android/consumer-rules.pro b/node_modules/react-native-litert-lm/android/consumer-rules.pro
+new file mode 100644
+index 0000000..e69de29
