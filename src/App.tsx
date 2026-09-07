@@ -570,6 +570,7 @@ function App() {
         {screen === 'expense' && (
           <ExpenseFlow
             model={model}
+            items={items}
             onConfirmItem={addItem}
             prefilledDate={prefilledDate}
             onPrefilledDateConsumed={() => setPrefilledDate(null)}
@@ -647,11 +648,13 @@ function ScreenTabs({
 
 function ExpenseFlow({
   model,
+  items,
   onConfirmItem,
   prefilledDate,
   onPrefilledDateConsumed,
 }: {
   model: UseModelResult;
+  items: LineItem[];
   onConfirmItem: (item: LineItem) => void;
   prefilledDate: string | null;
   onPrefilledDateConsumed: () => void;
@@ -664,6 +667,13 @@ function ExpenseFlow({
     generate,
     reset,
   } = model;
+  // Nur relevant, wenn man aus dem Kalender kommt (Datum vorausgewählt) —
+  // zeigt im Entry-Screen, was für diesen Tag schon erfasst wurde, statt
+  // blind einen weiteren Posten hinzuzufügen, ohne die bestehenden zu sehen.
+  const existingItemsForDate = useMemo(
+    () => (prefilledDate ? items.filter(item => item.date === prefilledDate) : []),
+    [items, prefilledDate],
+  );
   const [step, setStep] = useState<'entry' | 'draft'>('entry');
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -860,6 +870,7 @@ function ExpenseFlow({
       downloadProgress={downloadProgress}
       error={displayError}
       prefilledDate={prefilledDate}
+      existingItemsForDate={existingItemsForDate}
     />
   );
 }
@@ -874,6 +885,7 @@ function EntryScreen({
   downloadProgress,
   error,
   prefilledDate,
+  existingItemsForDate,
 }: {
   text: string;
   onChangeText: (t: string) => void;
@@ -884,6 +896,7 @@ function EntryScreen({
   downloadProgress: number;
   error: string | null;
   prefilledDate: string | null;
+  existingItemsForDate: LineItem[];
 }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -927,6 +940,26 @@ function EntryScreen({
       />
 
       {error && <Text style={styles.errorText}>{error}</Text>}
+
+      {existingItemsForDate.length > 0 && (
+        <>
+          <Text style={styles.label}>
+            Bereits erfasst für {formatDateDMY(prefilledDate as string)}:
+          </Text>
+          {existingItemsForDate.map(item => (
+            <View key={item.id} style={styles.lineItemRow}>
+              <Text style={styles.lineItemDescription}>{item.description}</Text>
+              <Text style={styles.lineItemMeta}>
+                {item.amount !== null
+                  ? `${item.amount.toFixed(2)} ${item.currency}`
+                  : '—'}{' '}
+                · {item.category ?? 'Sonstiges'} ·{' '}
+                {item.cadence === 'monthly' ? 'Fixkosten' : 'Einmalig'}
+              </Text>
+            </View>
+          ))}
+        </>
+      )}
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
