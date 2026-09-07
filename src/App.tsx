@@ -498,8 +498,14 @@ function ExpenseFlow({
       // langsame OCR+LLM-Verarbeitung fertig ist und der Entwurf-Screen das
       // Foto anzeigen will, existiert die ursprüngliche Datei sonst nicht
       // mehr (bestätigt: leeres Vorschau-Feld auf Android, siehe CLAUDE.md
-      // Lessons Learned).
-      const persistentPath = `${RNFS.CachesDirectoryPath}/beleg-${Date.now()}.jpg`;
+      // Lessons Learned). Bewusst DocumentDirectoryPath statt
+      // CachesDirectoryPath: Gemma 4s eigene XNNPACK-Kompilierungs-Caches
+      // liegen im selben Cache-Ordner und sind teils >700 MB gross, wodurch
+      // Android die App-Cache-Quota sprengt sieht und regelmässig (per
+      // installd, ca. alle 60s beobachtet) automatisch älteste Dateien
+      // purgt — inklusive unserer gerade erst kopierten Beleg-Datei, bevor
+      // der Entwurf-Screen sie anzeigen konnte (bestätigt per Logcat).
+      const persistentPath = `${RNFS.DocumentDirectoryPath}/beleg-${Date.now()}.jpg`;
       await RNFS.copyFile(uri.replace('file://', ''), persistentPath);
       const persistentUri = `file://${persistentPath}`;
 
