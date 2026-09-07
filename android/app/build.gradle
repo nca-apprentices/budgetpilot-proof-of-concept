@@ -130,4 +130,11 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Android-Gegenstück zu Apples Vision-Framework (siehe
+    // ios/budgetpilot/ReceiptOCR.swift) — Text-Erkennung für Beleg-Fotos.
+    // "Bundled" statt "unbundled/cloud": Modell wird mit der App
+    // ausgeliefert bzw. beim ersten Start on-device geladen, keine
+    // Google-Play-Services-Cloud-Anbindung nötig, komplett offline.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }

@@ -14,8 +14,9 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+          // Lokales natives Modul (nicht per npm autolinked) — Android-
+          // Gegenstück zu ios/budgetpilot/ReceiptOCR.swift.
+          add(ReceiptOCRPackage())
         },
     )
   }

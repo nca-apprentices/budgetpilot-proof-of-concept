@@ -1,8 +1,10 @@
 import { NativeModules } from 'react-native';
 
-// Native Bridge zu Apples Vision-Framework (VNRecognizeTextRequest), siehe
-// ios/budgetpilot/ReceiptOCR.swift. Nur iOS — ein Android-Äquivalent
-// (z.B. ML Kit Text Recognition) ist noch nicht implementiert.
+// Native Bridge zur Text-Erkennung: auf iOS Apples Vision-Framework
+// (ios/budgetpilot/ReceiptOCR.swift), auf Android Google ML Kit Text
+// Recognition (android/.../ReceiptOCRModule.kt) — beide unter demselben
+// Modulnamen "ReceiptOCR" registriert, damit dieser Wrapper plattform-
+// unabhängig bleibt.
 type ReceiptOCRModule = {
   recognizeText(uri: string): Promise<string>;
 };

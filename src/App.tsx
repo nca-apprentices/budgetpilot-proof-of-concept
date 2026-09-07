@@ -47,6 +47,7 @@ import {
 } from './budget';
 import { computeBudget } from './budgetEngine';
 import { buildBudgetReportPdf, savePdfAndShare } from './pdfExport';
+import RNFS from 'react-native-fs';
 import { recognizeReceiptText } from './receiptOcr';
 
 // Öffentliche HuggingFace-URL (kein Login/Lizenz-Klick nötig, anders als das
@@ -490,7 +491,19 @@ function ExpenseFlow({
     }
     setIsProcessingPhoto(true);
     try {
-      const ocrText = await recognizeReceiptText(uri);
+      // Sofort in einen dauerhaften Ort im eigenen App-Speicher kopieren,
+      // statt die vom Bild-Picker gelieferte URI direkt weiterzuverwenden:
+      // react-native-image-picker räumt seine temporäre Cache-Datei auf
+      // Android schnell wieder auf (auf iOS bisher nie beobachtet) — bis die
+      // langsame OCR+LLM-Verarbeitung fertig ist und der Entwurf-Screen das
+      // Foto anzeigen will, existiert die ursprüngliche Datei sonst nicht
+      // mehr (bestätigt: leeres Vorschau-Feld auf Android, siehe CLAUDE.md
+      // Lessons Learned).
+      const persistentPath = `${RNFS.CachesDirectoryPath}/beleg-${Date.now()}.jpg`;
+      await RNFS.copyFile(uri.replace('file://', ''), persistentPath);
+      const persistentUri = `file://${persistentPath}`;
+
+      const ocrText = await recognizeReceiptText(persistentUri);
       console.log('[extraction-photo] OCR-Text:', ocrText);
       // Wie beim Freitext-Pfad: jede Extraktion ist eine unabhängige
       // Einzelanfrage, sonst hängt sie an der Konversationshistorie
@@ -513,7 +526,7 @@ function ExpenseFlow({
       setDraftInitialDate(prefilledDate ?? todayIso());
       onPrefilledDateConsumed();
       setDraftSource('photo');
-      setDraftPhotoUri(uri);
+      setDraftPhotoUri(persistentUri);
       setStep('draft');
     } catch (e) {
       console.error('[extraction-photo] Fehler:', e);
