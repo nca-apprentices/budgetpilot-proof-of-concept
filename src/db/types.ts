@@ -168,5 +168,10 @@ export function isItemKind(value: unknown): value is ItemKind {
 }
 
 export function isSource(value: unknown): value is Source {
-  return value === 'free_text' || value === 'manual' || value === 'toppreise';
+  return (
+    value === 'free_text' ||
+    value === 'photo' ||
+    value === 'manual' ||
+    value === 'toppreise'
+  );
 }

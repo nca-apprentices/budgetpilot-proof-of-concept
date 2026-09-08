@@ -77,6 +77,60 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX idx_price_results_query ON price_results(query)`,
     ],
   },
+  {
+    // Migration 1s CHECK-Constraint auf line_items.source erlaubt nur
+    // 'free_text' | 'manual' | 'toppreise' — 'photo' fehlt (LineItem['source']
+    // in budget.ts kennt es aber, siehe Kamera-Feature). Bestätigen eines per
+    // Foto erfassten Belegs schlug dadurch mit einem CHECK-Constraint-Fehler
+    // fehl. SQLite kann eine CHECK-Constraint nicht per ALTER TABLE ändern —
+    // Standard-Workaround: Tabelle mit korrigierter Constraint neu anlegen,
+    // Daten kopieren, alte Tabelle löschen, neue umbenennen. Bewusst in
+    // dieser Reihenfolge (erst DROP der alten `line_items`, danach erst die
+    // neue Tabelle daraufhin umbenennen) statt die alte Tabelle vorher
+    // umzubenennen — sonst schreibt SQLite die FK-Referenz in
+    // price_results.line_item_id automatisch auf den alten Zwischennamen um
+    // und sie zeigt danach ins Leere.
+    version: 2,
+    statements: [
+      `CREATE TABLE line_items_v2 (
+         id           TEXT    PRIMARY KEY NOT NULL,
+         month_id     TEXT    NOT NULL REFERENCES budget_months(id) ON DELETE CASCADE,
+         kind         TEXT    NOT NULL CHECK (kind IN ('income_deduction','fixed_cost','planned_purchase','expense')),
+         description  TEXT    NOT NULL,
+         amount_cents INTEGER,
+         currency     TEXT    NOT NULL DEFAULT 'CHF',
+         cadence      TEXT    NOT NULL CHECK (cadence IN ('monthly','one_time')),
+         category     TEXT,
+         source       TEXT    NOT NULL CHECK (source IN ('free_text','photo','manual','toppreise')),
+         confidence   REAL,
+         reason       TEXT,
+         needs_input  INTEGER NOT NULL DEFAULT 0 CHECK (needs_input IN (0,1)),
+         user_edited  INTEGER NOT NULL DEFAULT 0 CHECK (user_edited IN (0,1)),
+         notes        TEXT,
+         date         TEXT    NOT NULL CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+         created_at   TEXT    NOT NULL,
+         updated_at   TEXT    NOT NULL
+       )`,
+
+      `INSERT INTO line_items_v2 (
+         id, month_id, kind, description, amount_cents, currency, cadence,
+         category, source, confidence, reason, needs_input, user_edited,
+         notes, date, created_at, updated_at
+       )
+       SELECT
+         id, month_id, kind, description, amount_cents, currency, cadence,
+         category, source, confidence, reason, needs_input, user_edited,
+         notes, date, created_at, updated_at
+       FROM line_items`,
+
+      `DROP TABLE line_items`,
+
+      `ALTER TABLE line_items_v2 RENAME TO line_items`,
+
+      `CREATE INDEX idx_line_items_month_id ON line_items(month_id)`,
+      `CREATE INDEX idx_line_items_date ON line_items(date)`,
+    ],
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS.length;
