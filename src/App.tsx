@@ -1707,6 +1707,12 @@ type GoldenRunResult = {
   case: GoldenSetCase;
   actual: Draft | null;
   comparison: GoldenSetComparison;
+  // Zeit für reset() + generate() dieses einen Falls, in Millisekunden —
+  // bisher gab es dafür nur ein Gefühl ("dauert teils über eine Minute auf
+  // CPU"), keine echte Zahl (siehe CLAUDE.md Testplan). Auch bei einem
+  // fehlgeschlagenen Fall gemessen (der Modellaufruf selbst lief ja noch,
+  // nur das Parsen danach ist gescheitert) statt die Messung zu verwerfen.
+  durationMs: number;
 };
 
 const FAILED_COMPARISON: GoldenSetComparison = {
@@ -1760,6 +1766,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
     for (let i = 0; i < GOLDEN_SET.length; i++) {
       const testCase = GOLDEN_SET[i];
       setGoldenSetProgress(i);
+      const startedAt = Date.now();
       try {
         reset();
         const raw = await generate(buildExtractionPrompt(testCase.input));
@@ -1768,10 +1775,16 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
           case: testCase,
           actual,
           comparison: compareToExpected(testCase.expected, actual),
+          durationMs: Date.now() - startedAt,
         });
       } catch (e) {
         console.error(`[golden-set] Fall "${testCase.id}" fehlgeschlagen:`, e);
-        results.push({ case: testCase, actual: null, comparison: FAILED_COMPARISON });
+        results.push({
+          case: testCase,
+          actual: null,
+          comparison: FAILED_COMPARISON,
+          durationMs: Date.now() - startedAt,
+        });
       }
     }
     setGoldenResults(results);
@@ -1785,14 +1798,21 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
     const total = goldenResults.length;
     const count = (pick: (r: GoldenRunResult) => boolean) =>
       goldenResults.filter(pick).length;
+    const durations = goldenResults.map(r => r.durationMs).sort((a, b) => a - b);
+    const avgMs = durations.reduce((sum, d) => sum + d, 0) / durations.length;
     return {
       total,
       allCorrect: count(r => r.comparison.allCorrect),
       amountCorrect: count(r => r.comparison.amountCorrect),
       categoryCorrect: count(r => r.comparison.categoryCorrect),
       cadenceCorrect: count(r => r.comparison.cadenceCorrect),
+      avgMs,
+      minMs: durations[0],
+      maxMs: durations[durations.length - 1],
     };
   }, [goldenResults]);
+
+  const formatSeconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
   let status = 'Modell wird geladen…';
   if (error) status = `Fehler beim Laden: ${error}`;
@@ -1874,6 +1894,10 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
             {goldenSummary.categoryCorrect}/{goldenSummary.total} · Häufigkeit:{' '}
             {goldenSummary.cadenceCorrect}/{goldenSummary.total}
           </Text>
+          <Text style={styles.status}>
+            Antwortzeit: Ø {formatSeconds(goldenSummary.avgMs)} · min {formatSeconds(goldenSummary.minMs)} ·
+            max {formatSeconds(goldenSummary.maxMs)}
+          </Text>
           {goldenResults!.map(result => (
             <View key={result.case.id} style={styles.lineItemRow}>
               <Text style={styles.lineItemDescription}>
@@ -1890,6 +1914,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
                   ? `${result.actual.amount !== null ? result.actual.amount.toFixed(2) : '—'} ${result.actual.currency} · ${result.actual.category ?? 'needs_input'} · ${result.actual.cadence === 'monthly' ? 'monatlich' : 'einmalig'}`
                   : 'Fehler bei der Auswertung'}
               </Text>
+              <Text style={styles.lineItemMeta}>{formatSeconds(result.durationMs)}</Text>
             </View>
           ))}
         </>
