@@ -22,7 +22,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
-  Button,
   Image,
   Linking,
   Platform,
@@ -796,6 +795,51 @@ function App() {
   );
 }
 
+// Ersetzt die native RN-<Button>, die sich visuell nicht anpassen lässt
+// (kein Padding/Radius/Schatten, sieht auf jeder Plattform nach
+// Standard-OS-Steuerelement statt nach eigener App aus) — reines Styling,
+// identische Props/Verhalten (title/onPress/disabled) wie vorher.
+function AppButton({
+  title,
+  onPress,
+  disabled,
+  variant = 'primary',
+}: {
+  title: string;
+  onPress: () => void;
+  disabled?: boolean;
+  variant?: 'primary' | 'secondary' | 'danger';
+}) {
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
+  const variantStyle =
+    variant === 'primary'
+      ? styles.appButtonPrimary
+      : variant === 'danger'
+        ? styles.appButtonDanger
+        : styles.appButtonSecondary;
+  const textStyle =
+    variant === 'primary'
+      ? styles.appButtonPrimaryText
+      : variant === 'danger'
+        ? styles.appButtonDangerText
+        : styles.appButtonSecondaryText;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.appButtonBase,
+        variantStyle,
+        disabled ? styles.appButtonDisabled : pressed && styles.appButtonPressed,
+      ]}
+    >
+      <Text style={[styles.appButtonText, textStyle]}>{title}</Text>
+    </Pressable>
+  );
+}
+
 function ScreenTabs({
   screen,
   onChange,
@@ -813,32 +857,72 @@ function ScreenTabs({
     { key: 'price', label: 'Preise' },
     { key: 'llmTest', label: 'LLM-Test' },
   ];
+
+  // Schmaler, farbiger Scroll-Indikator unter der Tab-Leiste (eigenes,
+  // schlichteres Pendant zu showsHorizontalScrollIndicator — der native
+  // Indikator ist zu unauffällig/grau und blendet meist gleich wieder aus).
+  // Signalisiert neuen Nutzern, dass hier mehr als die sichtbaren Tabs
+  // liegen und wandert proportional zur Scroll-Position mit.
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const [contentWidth, setContentWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const showScrollThumb = contentWidth > viewportWidth && viewportWidth > 0;
+  const thumbWidth = showScrollThumb
+    ? Math.max(28, (viewportWidth / contentWidth) * viewportWidth)
+    : 0;
+  const maxScrollX = Math.max(contentWidth - viewportWidth, 1);
+  const maxThumbTravel = Math.max(viewportWidth - thumbWidth, 0);
+  const thumbTranslate = scrollX.interpolate({
+    inputRange: [0, maxScrollX],
+    outputRange: [0, maxThumbTravel],
+    extrapolate: 'clamp',
+  });
+
   // Horizontal scrollbar: ab 5 Tabs passen die Labels nicht mehr auf ein
   // iPhone — vorher wurde "LLM-Test" am rechten Rand abgeschnitten.
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={[styles.tabBar, { paddingTop: insets.top + 12 }]}
-      contentContainerStyle={styles.tabBarContent}
-    >
-      {tabs.map(tab => (
-        <Pressable
-          key={tab.key}
-          style={[
-            styles.tabButton,
-            screen === tab.key && styles.tabButtonActive,
-          ]}
-          onPress={() => onChange(tab.key)}
-        >
-          <Text
-            style={[styles.tabText, screen === tab.key && styles.tabTextActive]}
+    <View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        onLayout={e => setViewportWidth(e.nativeEvent.layout.width)}
+        onContentSizeChange={w => setContentWidth(w)}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+          { useNativeDriver: false },
+        )}
+        scrollEventThrottle={16}
+        style={[styles.tabBar, { paddingTop: insets.top + 12 }]}
+        contentContainerStyle={styles.tabBarContent}
+      >
+        {tabs.map(tab => (
+          <Pressable
+            key={tab.key}
+            style={[
+              styles.tabButton,
+              screen === tab.key && styles.tabButtonActive,
+            ]}
+            onPress={() => onChange(tab.key)}
           >
-            {tab.label}
-          </Text>
-        </Pressable>
-      ))}
-    </ScrollView>
+            <Text
+              style={[styles.tabText, screen === tab.key && styles.tabTextActive]}
+            >
+              {tab.label}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      {showScrollThumb && (
+        <View style={styles.tabScrollTrack}>
+          <Animated.View
+            style={[
+              styles.tabScrollThumb,
+              { width: thumbWidth, transform: [{ translateX: thumbTranslate }] },
+            ]}
+          />
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -1366,7 +1450,7 @@ function EntryScreen({
 
       {existingItemsForDate.length > 0 && (
         <>
-          <Text style={styles.label}>
+          <Text style={[styles.label, { textTransform: 'none', letterSpacing: 0 }]}>
             Bereits erfasst für {formatDateDMY(prefilledDate as string)} (antippen zum
             Bearbeiten):
           </Text>
@@ -1391,17 +1475,18 @@ function EntryScreen({
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title={isBusy ? 'Analysiere…' : 'Weiter'}
             onPress={onWeiter}
             disabled={!isReady || isBusy || text.trim().length === 0}
           />
         </View>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title={isBusy ? 'Analysiere…' : '📷 Beleg fotografieren'}
             onPress={onFoto}
             disabled={!isReady || isBusy}
+            variant="secondary"
           />
         </View>
       </View>
@@ -1534,10 +1619,11 @@ function DraftScreen({
       {isEditing && (
         <View style={styles.buttonRow}>
           <View style={styles.buttonWrapper}>
-            <Button
+            <AppButton
               title={isProcessingPhoto ? 'Analysiere…' : '📷 Neue Quittung'}
               onPress={onRescan}
               disabled={isProcessingPhoto}
+              variant="secondary"
             />
           </View>
         </View>
@@ -1653,7 +1739,7 @@ function DraftScreen({
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title="Bestätigen"
             disabled={!canConfirm}
             onPress={() =>
@@ -1674,11 +1760,11 @@ function DraftScreen({
           />
         </View>
         <View style={styles.buttonWrapper}>
-          <Button title="Verwerfen" onPress={onDiscard} color="#999" />
+          <AppButton title="Verwerfen" onPress={onDiscard} variant="secondary" />
         </View>
         {isEditing && (
           <View style={styles.buttonWrapper}>
-            <Button title="Löschen" onPress={onDelete} color={DANGER_COLOR} />
+            <AppButton title="Löschen" onPress={onDelete} variant="danger" />
           </View>
         )}
       </View>
@@ -1812,7 +1898,12 @@ function BudgetScreen({
             key={index}
             style={[
               styles.warningBox,
-              { borderColor: isOverBudget ? DANGER_COLOR : CAUTION_COLOR },
+              {
+                borderLeftColor: isOverBudget ? DANGER_COLOR : CAUTION_COLOR,
+                backgroundColor: isOverBudget
+                  ? 'rgba(220,38,38,0.08)'
+                  : 'rgba(245,158,11,0.08)',
+              },
             ]}
           >
             <Text
@@ -1831,7 +1922,7 @@ function BudgetScreen({
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title={isExporting ? 'Exportiere…' : 'Als PDF exportieren'}
             onPress={handleExportPdf}
             disabled={isExporting}
@@ -1982,11 +2073,11 @@ function CalendarScreen({
     const marks: Record<string, { marked: true; dotColor: string }> = {};
     for (const item of items) {
       if (item.date) {
-        marks[item.date] = { marked: true, dotColor: '#2563eb' };
+        marks[item.date] = { marked: true, dotColor: colors.accent };
       }
     }
     return marks;
-  }, [items]);
+  }, [items, colors.accent]);
 
   return (
     <ScrollView
@@ -2005,10 +2096,10 @@ function CalendarScreen({
         markedDates={markedDates}
         onDayPress={(day: DateData) => onSelectDate(day.dateString)}
         theme={{
-          todayTextColor: '#2563eb',
-          arrowColor: '#2563eb',
-          dotColor: '#2563eb',
-          calendarBackground: colors.background,
+          todayTextColor: colors.accent,
+          arrowColor: colors.accent,
+          dotColor: colors.accent,
+          calendarBackground: colors.surface,
           dayTextColor: colors.text,
           monthTextColor: colors.text,
           textSectionTitleColor: colors.textMuted,
@@ -2145,17 +2236,18 @@ function PriceSearchScreen({ model }: { model: UseModelResult }) {
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title="Preis suchen"
             onPress={handleSuchen}
             disabled={text.trim().length === 0 || isGenerating || isSearching}
           />
         </View>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title="Zurücksetzen"
             onPress={handleZuruecksetzen}
             disabled={!hasSomethingToClear || isGenerating || isSearching}
+            variant="secondary"
           />
         </View>
       </View>
@@ -2171,10 +2263,11 @@ function PriceSearchScreen({ model }: { model: UseModelResult }) {
           />
           <View style={styles.buttonRow}>
             <View style={styles.buttonWrapper}>
-              <Button
+              <AppButton
                 title="Erneut suchen"
                 onPress={() => runSearch(searchTerm)}
                 disabled={searchTerm.trim().length === 0 || isSearching}
+                variant="secondary"
               />
             </View>
           </View>
@@ -2184,7 +2277,12 @@ function PriceSearchScreen({ model }: { model: UseModelResult }) {
       {error !== null && <Text style={styles.errorText}>{error}</Text>}
 
       {cacheNote !== null && (
-        <View style={[styles.warningBox, { borderColor: CAUTION_COLOR }]}>
+        <View
+          style={[
+            styles.warningBox,
+            { borderLeftColor: CAUTION_COLOR, backgroundColor: 'rgba(245,158,11,0.08)' },
+          ]}
+        >
           <Text style={[styles.warningText, { color: CAUTION_COLOR }]}>
             {cacheNote}
           </Text>
@@ -2397,19 +2495,20 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title={isGenerating ? 'Läuft…' : 'Test ausführen'}
             onPress={runTest}
             disabled={!isReady || isGenerating || isRunningGoldenSet || prompt.trim().length === 0}
           />
         </View>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title="Zurücksetzen"
             onPress={clear}
             disabled={
               isGenerating || isRunningGoldenSet || (prompt.length === 0 && response === null)
             }
+            variant="secondary"
           />
         </View>
       </View>
@@ -2425,7 +2524,7 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonWrapper}>
-          <Button
+          <AppButton
             title={
               isRunningGoldenSet
                 ? `Läuft… (${goldenSetProgress + 1}/${GOLDEN_SET.length})`
@@ -2487,22 +2586,40 @@ function useThemeColors() {
   return useMemo(
     () => ({
       isDarkMode,
-      background: isDarkMode ? '#121212' : '#fff',
-      text: isDarkMode ? '#f2f2f2' : '#111',
-      textMuted: isDarkMode ? '#aaaaaa' : '#666',
-      textSubtle: isDarkMode ? '#bbbbbb' : '#555',
-      chipText: isDarkMode ? '#e5e5e5' : '#333',
-      border: isDarkMode ? '#555' : '#ccc',
-      borderSubtle: isDarkMode ? '#333' : '#eee',
-      inputBackground: isDarkMode ? '#1e1e1e' : '#fff',
-      previewBackground: isDarkMode ? '#1e1e1e' : '#f2f2f2',
-      placeholder: isDarkMode ? '#888' : '#999',
+      // Canvas leicht vom Karten-Hintergrund (surface) abgesetzt, statt
+      // beides gleich — dadurch wirken Karten/Inputs als eigene Ebene statt
+      // nur als Rahmen auf derselben Fläche ("Material"-artige Optik).
+      background: isDarkMode ? '#0f1115' : '#f4f5f7',
+      surface: isDarkMode ? '#1b1e24' : '#ffffff',
+      surfaceRaised: isDarkMode ? '#22262e' : '#ffffff',
+      text: isDarkMode ? '#f2f3f5' : '#12151a',
+      textMuted: isDarkMode ? '#9aa1ac' : '#6b7280',
+      textSubtle: isDarkMode ? '#b7bdc7' : '#4b5563',
+      chipText: isDarkMode ? '#e6e8eb' : '#374151',
+      border: isDarkMode ? '#3a3f47' : '#dde1e6',
+      borderSubtle: isDarkMode ? '#282c33' : '#eceef1',
+      inputBackground: isDarkMode ? '#22262e' : '#ffffff',
+      previewBackground: isDarkMode ? '#22262e' : '#f0f1f3',
+      placeholder: isDarkMode ? '#767c87' : '#9aa1ac',
+      shadow: isDarkMode ? '#000000' : '#1f2937',
+      // Etwas heller im Dark Mode für genug Kontrast auf dunklem Grund —
+      // einzige Stelle, an der der Akzent je nach Theme variiert, alle
+      // anderen Verwendungen greifen einheitlich auf colors.accent zu statt
+      // wie vorher '#2563eb' an >10 Stellen im Code zu wiederholen.
+      accent: isDarkMode ? '#5b93f5' : '#2563eb',
+      accentSoft: isDarkMode ? 'rgba(91,147,245,0.18)' : 'rgba(37,99,235,0.1)',
     }),
     [isDarkMode],
   );
 }
 
 function getStyles(colors: ReturnType<typeof useThemeColors>) {
+  // Der Undo-Banner invertiert seinen Hintergrund bewusst gegenüber dem
+  // Theme (siehe undoBanner unten) — der Akzent darauf braucht deshalb
+  // ebenfalls die umgekehrte Variante, sonst zu wenig Kontrast auf einem im
+  // Dark Mode plötzlich hellen Banner.
+  const undoAccent = colors.isDarkMode ? '#2563eb' : '#60a5fa';
+
   return StyleSheet.create({
     appContainer: {
       flex: 1,
@@ -2522,60 +2639,83 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
     // sitzt aber über allen Screens, damit er nicht übersehen wird.
     dbBanner: {
       fontSize: 13,
+      fontWeight: '500',
       color: '#fff',
       backgroundColor: DANGER_COLOR,
       paddingHorizontal: 20,
-      paddingVertical: 8,
+      paddingVertical: 10,
     },
     tabBar: {
       // flexGrow: 0 — sonst füllt die horizontale ScrollView die ganze Höhe.
       flexGrow: 0,
       flexShrink: 0,
+      backgroundColor: colors.surface,
       borderBottomWidth: 1,
       borderBottomColor: colors.borderSubtle,
     },
     tabBarContent: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingBottom: 12,
+      paddingHorizontal: 16,
+      paddingBottom: 14,
     },
     tabButton: {
-      paddingVertical: 6,
-      paddingHorizontal: 12,
-      borderRadius: 16,
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      borderRadius: 20,
       marginRight: 8,
     },
     tabButtonActive: {
-      backgroundColor: '#2563eb',
+      backgroundColor: colors.accent,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 3,
     },
     tabText: {
       fontSize: 13,
       fontWeight: '600',
-      color: colors.textSubtle,
+      color: colors.textMuted,
     },
     tabTextActive: {
       color: '#fff',
     },
+    tabScrollTrack: {
+      height: 3,
+      backgroundColor: colors.borderSubtle,
+    },
+    tabScrollThumb: {
+      height: 3,
+      borderRadius: 1.5,
+      backgroundColor: colors.accent,
+    },
     title: {
-      fontSize: 18,
-      fontWeight: '600',
-      marginBottom: 8,
+      fontSize: 20,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+      marginBottom: 6,
       color: colors.text,
     },
     status: {
       fontSize: 14,
+      lineHeight: 20,
       color: colors.textMuted,
-      marginBottom: 16,
+      marginBottom: 18,
     },
     receiptPreview: {
       width: '100%',
       height: 260,
-      borderRadius: 8,
+      borderRadius: 16,
       borderWidth: 1,
-      borderColor: colors.border,
-      marginBottom: 16,
+      borderColor: colors.borderSubtle,
+      marginBottom: 18,
       backgroundColor: colors.previewBackground,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 2,
     },
     progressRow: {
       flexDirection: 'row',
@@ -2592,6 +2732,7 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
     },
     progressLabel: {
       fontSize: 12,
+      fontWeight: '600',
       color: colors.textMuted,
       marginLeft: 8,
       minWidth: 34,
@@ -2600,27 +2741,27 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
     progressFill: {
       height: '100%',
       borderRadius: 4,
-      backgroundColor: '#2563eb',
+      backgroundColor: colors.accent,
     },
     undoBanner: {
       position: 'absolute',
       left: 16,
       right: 16,
-      borderRadius: 10,
+      borderRadius: 14,
       overflow: 'hidden',
       backgroundColor: colors.text,
       shadowColor: '#000',
-      shadowOpacity: 0.2,
-      shadowRadius: 6,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 4,
+      shadowOpacity: 0.25,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 5,
     },
     undoRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingVertical: 14,
-      paddingHorizontal: 16,
+      paddingHorizontal: 18,
     },
     undoText: {
       flex: 1,
@@ -2631,7 +2772,7 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
     undoAction: {
       fontSize: 14,
       fontWeight: '700',
-      color: '#60a5fa',
+      color: undoAccent,
     },
     undoTrack: {
       height: 3,
@@ -2639,99 +2780,165 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
     },
     undoFill: {
       height: '100%',
-      backgroundColor: '#60a5fa',
+      backgroundColor: undoAccent,
     },
     buttonRow: {
       flexDirection: 'row',
-      marginTop: 16,
-      marginBottom: 24,
+      flexWrap: 'wrap',
+      marginTop: 22,
+      marginBottom: 8,
     },
     buttonWrapper: {
-      marginRight: 12,
+      marginRight: 10,
+      marginBottom: 10,
+    },
+    // Basis-Look der AppButton-Komponente (ersetzt die native <Button>).
+    appButtonBase: {
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 12,
+      minHeight: 46,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    appButtonPrimary: {
+      backgroundColor: colors.accent,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.22,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 3,
+    },
+    appButtonSecondary: {
+      backgroundColor: colors.accentSoft,
+    },
+    appButtonDanger: {
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      borderColor: DANGER_COLOR,
+    },
+    appButtonDisabled: {
+      opacity: 0.4,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    appButtonPressed: {
+      opacity: 0.82,
+    },
+    appButtonText: {
+      fontSize: 15,
+      fontWeight: '700',
+    },
+    appButtonPrimaryText: {
+      color: '#ffffff',
+    },
+    appButtonSecondaryText: {
+      color: colors.accent,
+    },
+    appButtonDangerText: {
+      color: DANGER_COLOR,
     },
     label: {
-      fontSize: 13,
-      fontWeight: '600',
-      marginTop: 12,
-      color: colors.text,
+      fontSize: 12,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginTop: 18,
+      marginBottom: 2,
+      color: colors.textMuted,
     },
     manualEditBadge: {
-      fontSize: 12,
-      fontWeight: '400',
+      fontSize: 11,
+      fontWeight: '500',
+      textTransform: 'none',
+      letterSpacing: 0,
       fontStyle: 'italic',
       color: colors.textMuted,
     },
     input: {
-      fontSize: 14,
+      fontSize: 15,
       marginTop: 4,
-      minHeight: 44,
+      minHeight: 46,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 6,
-      padding: 8,
+      borderRadius: 10,
+      padding: 12,
       textAlignVertical: 'top',
       color: colors.text,
       backgroundColor: colors.inputBackground,
     },
     response: {
-      fontSize: 14,
-      marginTop: 4,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 6,
       color: colors.text,
     },
     errorText: {
       fontSize: 13,
+      fontWeight: '500',
       color: DANGER_COLOR,
       marginTop: 8,
     },
     lowConfidenceBorder: {
       borderColor: CAUTION_COLOR,
-      borderWidth: 2,
+      borderWidth: 1.5,
     },
     needsInputBorder: {
       borderColor: DANGER_COLOR,
-      borderWidth: 2,
+      borderWidth: 1.5,
     },
     needsInputHint: {
       fontSize: 12,
+      fontWeight: '500',
       color: DANGER_COLOR,
       marginTop: 4,
     },
     warningBox: {
-      borderWidth: 2,
-      borderRadius: 6,
-      padding: 10,
-      marginTop: 8,
+      borderRadius: 10,
+      borderLeftWidth: 4,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      marginTop: 10,
     },
     warningText: {
       fontSize: 13,
       fontWeight: '600',
-      color: colors.text,
+      lineHeight: 18,
     },
     lineItemRow: {
-      borderWidth: 1,
-      borderColor: colors.borderSubtle,
-      borderRadius: 6,
-      padding: 8,
-      marginTop: 4,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 14,
+      marginTop: 8,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.05,
+      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 1 },
+      elevation: 1,
     },
     priceCard: {
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 8,
-      padding: 12,
-      marginTop: 8,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 18,
+      marginTop: 10,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 2,
     },
     priceHero: {
-      fontSize: 28,
-      fontWeight: '700',
+      fontSize: 30,
+      fontWeight: '800',
+      letterSpacing: -0.5,
       color: colors.text,
       marginBottom: 4,
     },
     link: {
       fontSize: 13,
-      color: colors.isDarkMode ? '#60a5fa' : '#2563eb',
+      color: colors.accent,
       fontWeight: '600',
-      marginTop: 8,
+      marginTop: 10,
     },
     sourceNote: {
       fontSize: 11,
@@ -2740,68 +2947,73 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       lineHeight: 15,
     },
     lineItemDescription: {
-      fontSize: 14,
+      fontSize: 15,
       fontWeight: '600',
       color: colors.text,
     },
     lineItemMeta: {
-      fontSize: 12,
+      fontSize: 13,
       color: colors.textMuted,
-      marginTop: 2,
+      marginTop: 3,
     },
     segmentRow: {
       flexDirection: 'row',
-      marginTop: 4,
+      marginTop: 6,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 6,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
       overflow: 'hidden',
     },
     segmentButton: {
       flex: 1,
-      paddingVertical: 10,
+      paddingVertical: 11,
       alignItems: 'center',
     },
     segmentButtonActive: {
-      backgroundColor: '#2563eb',
+      backgroundColor: colors.accent,
     },
     segmentText: {
       fontSize: 14,
+      fontWeight: '500',
       color: colors.chipText,
     },
     segmentTextActive: {
       color: '#fff',
-      fontWeight: '600',
+      fontWeight: '700',
     },
     chipContainer: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      marginTop: 4,
-      padding: 4,
+      marginTop: 6,
+      padding: 6,
       borderWidth: 1,
       borderColor: 'transparent',
-      borderRadius: 6,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
     },
     chip: {
-      paddingVertical: 6,
-      paddingHorizontal: 12,
-      borderRadius: 16,
+      paddingVertical: 7,
+      paddingHorizontal: 14,
+      borderRadius: 18,
       borderWidth: 1,
       borderColor: colors.border,
+      backgroundColor: colors.background,
       marginRight: 8,
       marginBottom: 8,
     },
     chipSelected: {
-      backgroundColor: '#2563eb',
-      borderColor: '#2563eb',
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
     },
     chipText: {
       fontSize: 13,
+      fontWeight: '500',
       color: colors.chipText,
     },
     chipTextSelected: {
       color: '#fff',
-      fontWeight: '600',
+      fontWeight: '700',
     },
   });
 }
