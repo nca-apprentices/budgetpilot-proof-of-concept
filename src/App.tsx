@@ -93,6 +93,11 @@ const DEFAULT_PROMPT =
 
 const DANGER_COLOR = '#dc2626';
 const CAUTION_COLOR = '#f5a623';
+// Zeitfenster für "Rückgängig" nach Löschen/Neue-Quittung-Bestätigen — siehe
+// App()s triggerUndo(). Dateibasierte Nebenwirkungen (Foto löschen/ersetzen)
+// werden bis zum Ablauf aufgeschoben, damit ein Rückgängig-Machen wirklich
+// alles wiederherstellen kann.
+const UNDO_WINDOW_MS = 10000;
 
 type Draft = {
   description: string;
@@ -438,6 +443,17 @@ function findDateInText(text: string): string | null {
 
 type Screen = 'expense' | 'budget' | 'calendar' | 'price' | 'llmTest';
 
+// Ein offenes "Rückgängig"-Banner — siehe App()s triggerUndo(). `key` sorgt
+// für einen sauberen Remount von UndoSnackbar (frischer Timer/Animation) bei
+// jedem neuen Aufruf, auch wenn kurz hintereinander zwei Undo-fähige
+// Aktionen passieren.
+type UndoState = {
+  key: number;
+  message: string;
+  onUndo: () => void;
+  onExpire: () => void;
+};
+
 function App() {
   const colors = useThemeColors();
   const styles = useMemo(() => getStyles(colors), [colors]);
@@ -499,6 +515,11 @@ function App() {
   );
   const [dbError, setDbError] = useState<string | null>(null);
   const dbRef = useRef<SqlDatabase | null>(null);
+  // "Rückgängig"-Banner nach Löschen oder Bestätigen mit neuer Quittung
+  // (siehe triggerUndo weiter unten) — läuft app-weit, damit es auch dann
+  // noch sichtbar ist, wenn man inzwischen den Tab gewechselt hat.
+  const [undo, setUndo] = useState<UndoState | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -601,22 +622,73 @@ function App() {
     });
   };
 
-  // Löscht einen Posten unwiderruflich, inkl. seines dauerhaften Beleg-Fotos
-  // (falls vorhanden) — der Bestätigungs-Dialog dafür läuft in ExpenseFlow
-  // (handleLoeschen), hier nur noch die eigentliche Ausführung.
+  // Zeigt das "Rückgängig"-Banner unten (siehe UndoSnackbar) für
+  // UNDO_WINDOW_MS. `onExpire` läuft nur, wenn NICHT rückgängig gemacht
+  // wurde — dort gehören dateibasierte Aufräumarbeiten hin, die man vor
+  // Ablauf des Fensters noch rückgängig machen könnte (siehe deleteItem,
+  // handleBestaetigen in ExpenseFlow).
+  const triggerUndo = (
+    message: string,
+    handlers: { onUndo: () => void; onExpire: () => void },
+  ) => {
+    // Ein noch offenes Banner nicht einfach verwerfen, sonst würde dessen
+    // aufgeschobene Aufräumarbeit (z.B. eine zum Löschen vorgemerkte
+    // Foto-Datei) nie ausgeführt.
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undo?.onExpire();
+    }
+    const entry: UndoState = { key: Date.now(), message, ...handlers };
+    setUndo(entry);
+    undoTimerRef.current = setTimeout(() => {
+      entry.onExpire();
+      undoTimerRef.current = null;
+      setUndo(current => (current?.key === entry.key ? null : current));
+    }, UNDO_WINDOW_MS);
+  };
+
+  const handleUndoPress = () => {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    undo?.onUndo();
+    setUndo(null);
+  };
+
+  // Löscht einen Posten — der Bestätigungs-Dialog dafür läuft in ExpenseFlow
+  // (handleLoeschen), hier nur noch die eigentliche Ausführung. Die
+  // DB-Zeile/der lokale State werden sofort entfernt, ein evtl. dauerhaftes
+  // Beleg-Foto aber erst gelöscht, wenn das Undo-Fenster abläuft — sonst
+  // wäre "Rückgängig" kaputt (die Datei wäre schon weg).
   const deleteItem = (item: LineItem) => {
     setItems(prev => prev.filter(existing => existing.id !== item.id));
-    if (item.photoFilename) {
-      deleteBelegFile(`${RNFS.DocumentDirectoryPath}/${item.photoFilename}`);
-    }
     const db = dbRef.current;
-    if (!db) {
-      return;
+    if (db) {
+      deleteLineItem(db, item.id).catch(e => {
+        console.error('[db] Posten nicht gelöscht:', e);
+        setItems(prev => [...prev, item]);
+        setDbError(`"${item.description}" konnte nicht gelöscht werden.`);
+      });
     }
-    deleteLineItem(db, item.id).catch(e => {
-      console.error('[db] Posten nicht gelöscht:', e);
-      setItems(prev => [...prev, item]);
-      setDbError(`"${item.description}" konnte nicht gelöscht werden.`);
+    triggerUndo(`"${item.description}" gelöscht`, {
+      onUndo: () => {
+        setItems(prev => [...prev, item]);
+        if (db) {
+          addLineItems(db, [toNewLineItem(item)]).catch(e => {
+            console.error('[db] Posten nicht wiederhergestellt:', e);
+            setItems(prev => prev.filter(existing => existing.id !== item.id));
+            setDbError(
+              `"${item.description}" konnte nicht wiederhergestellt werden.`,
+            );
+          });
+        }
+      },
+      onExpire: () => {
+        if (item.photoFilename) {
+          deleteBelegFile(`${RNFS.DocumentDirectoryPath}/${item.photoFilename}`);
+        }
+      },
     });
   };
 
@@ -681,6 +753,7 @@ function App() {
             onConfirmItem={addItem}
             onUpdateItem={updateItem}
             onDeleteItem={deleteItem}
+            triggerUndo={triggerUndo}
             prefilledDate={prefilledDate}
             onPrefilledDateConsumed={() => setPrefilledDate(null)}
             itemToEdit={itemToEdit}
@@ -711,6 +784,14 @@ function App() {
         {screen === 'price' && <PriceSearchScreen model={model} />}
         {screen === 'llmTest' && <LlmTestScreen model={model} />}
       </View>
+      {undo && (
+        <UndoSnackbar
+          key={undo.key}
+          message={undo.message}
+          durationMs={UNDO_WINDOW_MS}
+          onPress={handleUndoPress}
+        />
+      )}
     </SafeAreaProvider>
   );
 }
@@ -767,6 +848,7 @@ function ExpenseFlow({
   onConfirmItem,
   onUpdateItem,
   onDeleteItem,
+  triggerUndo,
   prefilledDate,
   onPrefilledDateConsumed,
   itemToEdit,
@@ -777,6 +859,10 @@ function ExpenseFlow({
   onConfirmItem: (item: LineItem) => void;
   onUpdateItem: (id: string, patch: Partial<LineItem>) => void;
   onDeleteItem: (item: LineItem) => void;
+  triggerUndo: (
+    message: string,
+    handlers: { onUndo: () => void; onExpire: () => void },
+  ) => void;
   prefilledDate: string | null;
   onPrefilledDateConsumed: () => void;
   itemToEdit: LineItem | null;
@@ -1033,20 +1119,51 @@ function ExpenseFlow({
     // Frisch gescanntes Foto zum dauerhaften, postenspezifischen Dateinamen
     // befördern — ersetzt dabei ein evtl. vorhandenes altes Foto desselben
     // Postens (identischer Dateiname, siehe stableBelegFilename), da "Neue
-    // Quittung" die alte Quittung ersetzen soll, nicht danebenlegen.
+    // Quittung" die alte Quittung ersetzen soll, nicht danebenlegen. Ein
+    // vorhandenes altes Foto wird dabei bewusst nicht sofort gelöscht,
+    // sondern nur beiseitegelegt (Endung ".undo") — erst wenn das
+    // Undo-Fenster unten abläuft, wird es endgültig entfernt. So kann
+    // "Rückgängig" das alte Foto wiederherstellen.
     let photoFilename = editingItem?.photoFilename ?? null;
+    let restoreOldPhoto: (() => Promise<void>) | null = null;
+    let discardOldPhotoBackup: (() => Promise<void>) | null = null;
     if (pendingPhotoTempPath) {
-      const stablePath = `${RNFS.DocumentDirectoryPath}/${stableBelegFilename(id)}`;
-      await deleteBelegFile(stablePath);
+      const stableName = stableBelegFilename(id);
+      const stablePath = `${RNFS.DocumentDirectoryPath}/${stableName}`;
+      const backupPath = `${stablePath}.undo`;
+      const hadOldPhoto = editingItem?.photoFilename != null;
       try {
+        if (hadOldPhoto) {
+          await deleteBelegFile(backupPath); // Rest eines abgelaufenen, älteren Undo-Fensters
+          await RNFS.moveFile(stablePath, backupPath);
+        } else {
+          await deleteBelegFile(stablePath);
+        }
         await RNFS.moveFile(pendingPhotoTempPath, stablePath);
-        photoFilename = stableBelegFilename(id);
+        photoFilename = stableName;
+        if (hadOldPhoto) {
+          restoreOldPhoto = async () => {
+            await deleteBelegFile(stablePath);
+            await RNFS.moveFile(backupPath, stablePath);
+          };
+          discardOldPhotoBackup = async () => {
+            await deleteBelegFile(backupPath);
+          };
+        } else {
+          // Vorher gab es kein Foto — bei "Rückgängig" das gerade erst
+          // abgelegte neue Foto wieder entfernen, statt es verwaist liegen
+          // zu lassen (die DB zeigt nach dem Undo wieder photoFilename=null).
+          restoreOldPhoto = async () => {
+            await deleteBelegFile(stablePath);
+          };
+        }
       } catch (e) {
         console.error('[expense] Beleg-Foto konnte nicht übernommen werden:', e);
       }
     }
 
     if (editingItem) {
+      const previousItem = editingItem;
       onUpdateItem(editingItem.id, {
         description: finalDraft.description,
         amount: finalDraft.amount,
@@ -1057,6 +1174,28 @@ function ExpenseFlow({
         photoFilename,
         manuallyEditedFields,
       });
+      // Undo nur anbieten, wenn wirklich neu gescannt wurde — eine reine
+      // Text-/Betrags-Korrektur ohne "Neue Quittung" bekommt kein Banner.
+      if (pendingPhotoTempPath) {
+        triggerUndo('Neue Quittung übernommen', {
+          onUndo: () => {
+            onUpdateItem(previousItem.id, {
+              description: previousItem.description,
+              amount: previousItem.amount,
+              currency: previousItem.currency,
+              cadence: previousItem.cadence,
+              category: previousItem.category,
+              date: previousItem.date,
+              photoFilename: previousItem.photoFilename,
+              manuallyEditedFields: previousItem.manuallyEditedFields,
+            });
+            restoreOldPhoto?.();
+          },
+          onExpire: () => {
+            discardOldPhotoBackup?.();
+          },
+        });
+      }
     } else {
       const item: LineItem = {
         id,
@@ -1774,6 +1913,58 @@ function DownloadProgressBar({ progress }: { progress: number }) {
   );
 }
 
+// Banner unten am Bildschirmrand mit Countdown-Balken (7s, siehe
+// UNDO_WINDOW_MS) — Antippen ruft onPress (App()s handleUndoPress) auf.
+// Bewusst mit invertierten Theme-Farben (colors.text als Hintergrund,
+// colors.background als Textfarbe) statt eigener Farb-Tokens — funktioniert
+// dadurch automatisch in Hell- wie Dunkelmodus ohne weitere Fallunterscheidung.
+function UndoSnackbar({
+  message,
+  durationMs,
+  onPress,
+}: {
+  message: string;
+  durationMs: number;
+  onPress: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
+  const animatedWidth = useRef(new Animated.Value(100)).current;
+
+  useEffect(() => {
+    Animated.timing(animatedWidth, {
+      toValue: 0,
+      duration: durationMs,
+      useNativeDriver: false, // 'width' unterstützt keinen Native Driver
+    }).start();
+  }, [animatedWidth, durationMs]);
+
+  return (
+    <View style={[styles.undoBanner, { bottom: insets.bottom + 12 }]}>
+      <Pressable style={styles.undoRow} onPress={onPress}>
+        <Text style={styles.undoText} numberOfLines={1}>
+          {message}
+        </Text>
+        <Text style={styles.undoAction}>Rückgängig</Text>
+      </Pressable>
+      <View style={styles.undoTrack}>
+        <Animated.View
+          style={[
+            styles.undoFill,
+            {
+              width: animatedWidth.interpolate({
+                inputRange: [0, 100],
+                outputRange: ['0%', '100%'],
+              }),
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
 function CalendarScreen({
   items,
   onSelectDate,
@@ -2410,6 +2601,45 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       height: '100%',
       borderRadius: 4,
       backgroundColor: '#2563eb',
+    },
+    undoBanner: {
+      position: 'absolute',
+      left: 16,
+      right: 16,
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: colors.text,
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 4,
+    },
+    undoRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+    },
+    undoText: {
+      flex: 1,
+      fontSize: 14,
+      color: colors.background,
+      marginRight: 12,
+    },
+    undoAction: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#60a5fa',
+    },
+    undoTrack: {
+      height: 3,
+      backgroundColor: 'rgba(255,255,255,0.25)',
+    },
+    undoFill: {
+      height: '100%',
+      backgroundColor: '#60a5fa',
     },
     buttonRow: {
       flexDirection: 'row',
