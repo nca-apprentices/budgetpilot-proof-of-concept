@@ -3,14 +3,17 @@
  * "Testplan". Bisher gab es nur Einzel-Stichproben (n=2/n=3 bei Fotos); diese
  * Datei ist der erste Schritt zu einer systematischen Messung.
  *
- * Bewusst klein gestartet (20 statt der ursprünglich geplanten 30) — jeder
- * Fall braucht einen echten On-Device-Modellaufruf (Sekunden bis über eine
- * Minute auf CPU, siehe Lessons Learned), ein Voll-Set wäre für einen ersten
- * Durchlauf zu langsam. Die Liste ist beliebig erweiterbar.
+ * Ursprünglich mit 20 statt der geplanten 30 Fällen gestartet (jeder Fall
+ * braucht einen echten On-Device-Modellaufruf, Sekunden bis über eine Minute
+ * auf CPU, siehe Lessons Learned) — inzwischen auf die vollen 30 erweitert,
+ * die zusätzlichen 10 bewusst mit anderen Formulierungsmustern als die
+ * ersten 20 (unterschiedliche Wortstellung, Verben, CHF/EUR-Mix), um nicht
+ * nur eine einzige Satzstruktur zu testen. Die Liste bleibt beliebig
+ * erweiterbar, ohne den Batch-Runner (LLM-Test-Screen) anzufassen.
  *
- * Bewusst nur eindeutige Fälle in dieser ersten Version (kein needs_input) —
- * mehrdeutige Fälle (fehlender Betrag, Kategorie nicht klar zuordenbar)
- * lassen sich später separat ergänzen, sobald diese Basis läuft.
+ * Bewusst weiterhin nur eindeutige Fälle (kein needs_input) — mehrdeutige
+ * Fälle (fehlender Betrag, Kategorie nicht klar zuordenbar) lassen sich
+ * später separat ergänzen.
  *
  * @format
  */
@@ -130,6 +133,60 @@ export const GOLDEN_SET: GoldenSetCase[] = [
     id: 'ladekabel',
     input: 'Neues Handy-Ladekabel gekauft 25 CHF',
     expected: { amount: 25, currency: 'CHF', cadence: 'one_time', category: 'Sonstiges' },
+  },
+
+  // --- Erweiterung auf 30 Fälle: bewusst andere Formulierungsmuster als
+  // oben (Wortstellung, Verben, CHF/EUR-Mix), damit das Set nicht nur eine
+  // einzige Satzstruktur abdeckt.
+  {
+    id: 'internet-abo',
+    input: 'Internetabo Swisscom, 65 CHF pro Monat',
+    expected: { amount: 65, currency: 'CHF', cadence: 'monthly', category: 'Abos' },
+  },
+  {
+    id: 'apotheke-rezept',
+    input: 'Rezeptgebühr in der Apotheke bezahlt, 8.50 CHF',
+    expected: { amount: 8.5, currency: 'CHF', cadence: 'one_time', category: 'Gesundheit' },
+  },
+  {
+    id: 'velo-service',
+    input: 'Velo-Service beim Velohändler, 95 CHF',
+    expected: { amount: 95, currency: 'CHF', cadence: 'one_time', category: 'Mobilität' },
+  },
+  {
+    id: 'kleider-kauf',
+    input: 'Neue Winterjacke gekauft für 149.90 CHF',
+    expected: { amount: 149.9, currency: 'CHF', cadence: 'one_time', category: 'Sonstiges' },
+  },
+  {
+    id: 'strom-monatlich',
+    input: 'Stromrechnung, jeden Monat 85 CHF',
+    expected: { amount: 85, currency: 'CHF', cadence: 'monthly', category: 'Wohnen' },
+  },
+  {
+    id: 'restaurant-abend',
+    input: 'Abendessen im Restaurant mit Freunden, 68 CHF',
+    expected: { amount: 68, currency: 'CHF', cadence: 'one_time', category: 'Freizeit' },
+  },
+  {
+    id: 'zugticket-eur',
+    input: 'Zugticket in Deutschland gekauft, 59 EUR',
+    expected: { amount: 59, currency: 'EUR', cadence: 'one_time', category: 'Mobilität' },
+  },
+  {
+    id: 'brille-kauf',
+    input: 'Neue Brille beim Optiker, 320 CHF',
+    expected: { amount: 320, currency: 'CHF', cadence: 'one_time', category: 'Gesundheit' },
+  },
+  {
+    id: 'geburtstagsessen',
+    input: 'Essen gehen zum Geburtstag, letzten Samstag 95 CHF',
+    expected: { amount: 95, currency: 'CHF', cadence: 'one_time', category: 'Freizeit' },
+  },
+  {
+    id: 'cloud-abo',
+    input: 'iCloud Speicher Abo, 2.99 CHF im Monat',
+    expected: { amount: 2.99, currency: 'CHF', cadence: 'monthly', category: 'Abos' },
   },
 ];
 
