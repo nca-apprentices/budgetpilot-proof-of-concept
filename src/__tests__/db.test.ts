@@ -32,7 +32,7 @@ import {
   updateLineItem,
   type NewLineItem,
 } from '../db/repository';
-import { LATEST_SCHEMA_VERSION, migrate } from '../db/schema';
+import { LATEST_SCHEMA_VERSION, MIGRATIONS, migrate } from '../db/schema';
 import { toNewLineItem, toUiLineItem } from '../db/mapping';
 import { formatChf, parseChf } from '../db/types';
 import type { SqlDatabase, SqlQueryResult, SqlValue } from '../db/sql';
@@ -123,6 +123,36 @@ describe('Migrationen', () => {
     expect(names).toEqual(
       expect.arrayContaining(['budget_months', 'line_items', 'price_results']),
     );
+  });
+
+  test('Migration 2 behält bestehende Zeilen bei einem Upgrade von Version 1', async () => {
+    const db = createTestDb();
+    // Nur Migration 1 anwenden (der Zustand, in dem echte Geräte vor diesem
+    // Fix schon liefen), einen Posten anlegen, dann erst auf die aktuelle
+    // Version hochziehen.
+    await db.transaction(async tx => {
+      for (const statement of MIGRATIONS[0].statements) {
+        await tx.execute(statement);
+      }
+      await tx.execute('PRAGMA user_version = 1');
+    });
+    await addLineItems(db, [makeItem({ id: 'vor-migration-2' })]);
+
+    await expect(migrate(db)).resolves.toBe(LATEST_SCHEMA_VERSION);
+
+    const rows = await listLineItems(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: 'vor-migration-2', description: 'Miete' });
+  });
+
+  test('speichert und liest source "photo" korrekt zurück (fehlte in Migration 1s CHECK-Constraint und in isSource())', async () => {
+    const db = await freshDb();
+    await addLineItems(db, [makeItem({ id: 'foto-beleg', source: 'photo' })]);
+
+    const [row] = await listLineItems(db);
+    // Ohne den Fix in isSource() würde ein unbekannter Wert still auf
+    // 'manual' zurückfallen, statt den echten Wert durchzureichen.
+    expect(row.source).toBe('photo');
   });
 });
 
