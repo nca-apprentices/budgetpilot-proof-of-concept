@@ -82,6 +82,13 @@ export interface LineItemRow {
   notes: string | null;
   /** Kaufdatum, ISO `YYYY-MM-DD` — Grundlage der Kalender-Markierungen. */
   date: string;
+  /**
+   * Dateiname (nicht Pfad, siehe schema.ts Migration 3) des zugehörigen
+   * Beleg-Fotos in RNFS.DocumentDirectoryPath, oder null ohne Foto.
+   */
+  photoFilename: string | null;
+  /** Feldnamen, die der User gegenüber der letzten KI-Extraktion überschrieben hat. */
+  manuallyEditedFields: string[];
   createdAt: string;
   updatedAt: string;
 }

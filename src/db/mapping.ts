@@ -51,6 +51,8 @@ export function toNewLineItem(item: LineItem): NewLineItem {
     userEdited: false,
     notes: null,
     date: item.date,
+    photoFilename: item.photoFilename,
+    manuallyEditedFields: item.manuallyEditedFields,
   };
 }
 
@@ -67,6 +69,8 @@ export function toUiLineItem(row: LineItemRow): LineItem {
     confidence: row.confidence,
     notes: row.reason ?? row.notes ?? '',
     date: row.date,
+    photoFilename: row.photoFilename,
+    manuallyEditedFields: row.manuallyEditedFields,
   };
 }
 

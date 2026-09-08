@@ -23,8 +23,10 @@ import {
   readNullableNumber,
   readNullableText,
   readNumber,
+  readStringArray,
   readText,
   toSqlBoolean,
+  toSqlStringArray,
 } from './sql';
 
 /** Posten, wie ihn ein Screen liefert — Monat und Zeitstempel setzt das Repo. */
@@ -46,6 +48,8 @@ export type LineItemPatch = Partial<
     | 'needsInput'
     | 'notes'
     | 'date'
+    | 'photoFilename'
+    | 'manuallyEditedFields'
   >
 >;
 
@@ -102,6 +106,8 @@ function toLineItem(row: SqlRow): LineItemRow {
     userEdited: readBoolean(row.user_edited),
     notes: readNullableText(row.notes),
     date: readText(row.date),
+    photoFilename: readNullableText(row.photo_filename),
+    manuallyEditedFields: readStringArray(row.manually_edited_fields),
     createdAt: readText(row.created_at),
     updatedAt: readText(row.updated_at),
   };
@@ -211,8 +217,9 @@ async function insertLineItem(
     `INSERT INTO line_items
        (id, month_id, kind, description, amount_cents, currency, cadence,
         category, source, confidence, reason, needs_input, user_edited,
-        notes, date, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        notes, date, photo_filename, manually_edited_fields, created_at,
+        updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.monthId,
@@ -229,6 +236,8 @@ async function insertLineItem(
       toSqlBoolean(row.userEdited),
       row.notes,
       row.date,
+      row.photoFilename,
+      toSqlStringArray(row.manuallyEditedFields),
       row.createdAt,
       row.updatedAt,
     ],
@@ -318,6 +327,8 @@ export async function updateLineItem(
     needsInput: 'needs_input',
     notes: 'notes',
     date: 'date',
+    photoFilename: 'photo_filename',
+    manuallyEditedFields: 'manually_edited_fields',
   };
 
   const assignments: string[] = [];
@@ -331,6 +342,10 @@ export async function updateLineItem(
     }
     const value = patch[key];
     assignments.push(`${column} = ?`);
+    if (Array.isArray(value)) {
+      params.push(toSqlStringArray(value));
+      continue;
+    }
     params.push(
       typeof value === 'boolean' ? toSqlBoolean(value) : value ?? null,
     );
