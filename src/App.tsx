@@ -18,7 +18,7 @@
  * @format
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -30,6 +30,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   useColorScheme,
@@ -441,7 +442,19 @@ function findDateInText(text: string): string | null {
   return match ? parseDateDMY(match[1]) : null;
 }
 
-type Screen = 'expense' | 'budget' | 'calendar' | 'price' | 'llmTest';
+type Screen = 'expense' | 'budget' | 'calendar' | 'price' | 'llmTest' | 'settings';
+
+// Testweiser Dark-Mode-Umschalter (Settings-Tab) — überschreibt das
+// System-Theme, ohne useColorScheme() selbst zu verändern (nicht möglich).
+// Der State lebt in App() (Quelle der Wahrheit, siehe dort), Nachfahren
+// lesen ihn per Context statt per Prop-Drilling durch jede Screen-Komponente
+// — useThemeColors() wird bereits unabhängig von jeder Komponente aufgerufen.
+// Bewusst nicht persistiert: reiner Test-/Debug-Schalter für diesen PoC, kein
+// echtes Nutzer-Setting.
+const DarkModeOverrideContext = createContext<{
+  isDarkMode: boolean;
+  setIsDarkMode: (value: boolean) => void;
+} | null>(null);
 
 // Ein offenes "Rückgängig"-Banner — siehe App()s triggerUndo(). `key` sorgt
 // für einen sauberen Remount von UndoSnackbar (frischer Timer/Animation) bei
@@ -455,7 +468,20 @@ type UndoState = {
 };
 
 function App() {
-  const colors = useThemeColors();
+  // Eigene State-Quelle statt useThemeColors(): App() rendert die
+  // DarkModeOverrideContext.Provider erst in seinem JSX weiter unten, ein
+  // useContext()-Aufruf hier oben würde also nie den eigenen Provider sehen
+  // (Provider wirkt nur auf Nachfahren, nicht auf die Komponente, die ihn
+  // erzeugt). computeThemeColors() ist deshalb als reine Funktion ausgelagert
+  // und wird hier direkt mit dem lokalen State aufgerufen, statt über den Hook.
+  const systemColorScheme = useColorScheme();
+  const [darkModeOverride, setDarkModeOverride] = useState(
+    () => systemColorScheme === 'dark',
+  );
+  const colors = useMemo(
+    () => computeThemeColors(darkModeOverride),
+    [darkModeOverride],
+  );
   const styles = useMemo(() => getStyles(colors), [colors]);
   const model = useModel(MODEL_SOURCE, {
     // 'cpu' auf beiden Plattformen — auf Android macht die Wahl aktuell
@@ -714,85 +740,95 @@ function App() {
     cleanupOldTempBelegFiles(24 * 60 * 60 * 1000);
   }, []);
 
+  const darkModeOverrideValue = useMemo(
+    () => ({ isDarkMode: darkModeOverride, setIsDarkMode: setDarkModeOverride }),
+    [darkModeOverride],
+  );
+
   if (dbStatus !== 'ready') {
     return (
-      <SafeAreaProvider>
-        <StatusBar
-          barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'}
-        />
-        <View style={[styles.appContainer, styles.dbGate]}>
-          {dbStatus === 'loading' ? (
-            <Text style={styles.status}>Datenbank wird geöffnet …</Text>
-          ) : (
-            <>
-              <Text style={styles.title}>Datenbank nicht verfügbar</Text>
-              <Text style={styles.errorText}>{dbError}</Text>
-            </>
-          )}
-        </View>
-      </SafeAreaProvider>
+      <DarkModeOverrideContext.Provider value={darkModeOverrideValue}>
+        <SafeAreaProvider>
+          <StatusBar
+            barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'}
+          />
+          <View style={[styles.appContainer, styles.dbGate]}>
+            {dbStatus === 'loading' ? (
+              <Text style={styles.status}>Datenbank wird geöffnet …</Text>
+            ) : (
+              <>
+                <Text style={styles.title}>Datenbank nicht verfügbar</Text>
+                <Text style={styles.errorText}>{dbError}</Text>
+              </>
+            )}
+          </View>
+        </SafeAreaProvider>
+      </DarkModeOverrideContext.Provider>
     );
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'} />
-      <View style={styles.appContainer}>
-        <ScreenTabs screen={screen} onChange={setScreen} />
-        {dbError && (
-          <Pressable onPress={() => setDbError(null)}>
-            <Text style={styles.dbBanner}>
-              {dbError} (tippen zum Ausblenden)
-            </Text>
-          </Pressable>
-        )}
-        {screen === 'expense' && (
-          <ExpenseFlow
-            model={model}
-            items={items}
-            onConfirmItem={addItem}
-            onUpdateItem={updateItem}
-            onDeleteItem={deleteItem}
-            triggerUndo={triggerUndo}
-            prefilledDate={prefilledDate}
-            onPrefilledDateConsumed={() => setPrefilledDate(null)}
-            itemToEdit={itemToEdit}
-            onItemEditConsumed={() => setItemToEdit(null)}
+    <DarkModeOverrideContext.Provider value={darkModeOverrideValue}>
+      <SafeAreaProvider>
+        <StatusBar barStyle={colors.isDarkMode ? 'light-content' : 'dark-content'} />
+        <View style={styles.appContainer}>
+          <ScreenTabs screen={screen} onChange={setScreen} />
+          {dbError && (
+            <Pressable onPress={() => setDbError(null)}>
+              <Text style={styles.dbBanner}>
+                {dbError} (tippen zum Ausblenden)
+              </Text>
+            </Pressable>
+          )}
+          {screen === 'expense' && (
+            <ExpenseFlow
+              model={model}
+              items={items}
+              onConfirmItem={addItem}
+              onUpdateItem={updateItem}
+              onDeleteItem={deleteItem}
+              triggerUndo={triggerUndo}
+              prefilledDate={prefilledDate}
+              onPrefilledDateConsumed={() => setPrefilledDate(null)}
+              itemToEdit={itemToEdit}
+              onItemEditConsumed={() => setItemToEdit(null)}
+            />
+          )}
+          {screen === 'budget' && (
+            <BudgetScreen
+              model={model}
+              income={income}
+              onChangeIncome={changeIncome}
+              items={items}
+              onEditItem={item => {
+                setItemToEdit(item);
+                setScreen('expense');
+              }}
+            />
+          )}
+          {screen === 'calendar' && (
+            <CalendarScreen
+              items={items}
+              onSelectDate={date => {
+                setPrefilledDate(date);
+                setScreen('expense');
+              }}
+            />
+          )}
+          {screen === 'price' && <PriceSearchScreen model={model} />}
+          {screen === 'llmTest' && <LlmTestScreen model={model} />}
+          {screen === 'settings' && <SettingsScreen />}
+        </View>
+        {undo && (
+          <UndoSnackbar
+            key={undo.key}
+            message={undo.message}
+            durationMs={UNDO_WINDOW_MS}
+            onPress={handleUndoPress}
           />
         )}
-        {screen === 'budget' && (
-          <BudgetScreen
-            model={model}
-            income={income}
-            onChangeIncome={changeIncome}
-            items={items}
-            onEditItem={item => {
-              setItemToEdit(item);
-              setScreen('expense');
-            }}
-          />
-        )}
-        {screen === 'calendar' && (
-          <CalendarScreen
-            items={items}
-            onSelectDate={date => {
-              setPrefilledDate(date);
-              setScreen('expense');
-            }}
-          />
-        )}
-        {screen === 'price' && <PriceSearchScreen model={model} />}
-        {screen === 'llmTest' && <LlmTestScreen model={model} />}
-      </View>
-      {undo && (
-        <UndoSnackbar
-          key={undo.key}
-          message={undo.message}
-          durationMs={UNDO_WINDOW_MS}
-          onPress={handleUndoPress}
-        />
-      )}
-    </SafeAreaProvider>
+      </SafeAreaProvider>
+    </DarkModeOverrideContext.Provider>
   );
 }
 
@@ -812,6 +848,7 @@ function ScreenTabs({
     { key: 'calendar', label: 'Kalender' },
     { key: 'price', label: 'Preise' },
     { key: 'llmTest', label: 'LLM-Test' },
+    { key: 'settings', label: 'Einstellungen' },
   ];
   // Horizontal scrollbar: ab 5 Tabs passen die Labels nicht mehr auf ein
   // iPhone — vorher wurde "LLM-Test" am rechten Rand abgeschnitten.
@@ -2476,30 +2513,75 @@ function LlmTestScreen({ model }: { model: UseModelResult }) {
   );
 }
 
+// Testweiser Dark-Mode-Umschalter, damit sich die Styling-Arbeit (siehe
+// CLAUDE.md Lessons Learned zum Dark Mode) ohne Umweg über die
+// Simulator-/System-Einstellungen prüfen lässt. Bewusst nur dieser eine
+// Schalter — kein allgemeiner "Settings"-Screen mit weiteren Optionen, dafür
+// gibt es aktuell keinen Bedarf.
+function SettingsScreen() {
+  const colors = useThemeColors();
+  const styles = useMemo(() => getStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const override = useContext(DarkModeOverrideContext);
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{
+        paddingTop: 20,
+        paddingBottom: insets.bottom + 24,
+        paddingHorizontal: 20,
+      }}
+    >
+      <Text style={styles.title}>Einstellungen</Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingVertical: 12,
+        }}
+      >
+        <Text style={styles.label}>Dark Mode</Text>
+        <Switch
+          value={override?.isDarkMode ?? false}
+          onValueChange={value => override?.setIsDarkMode(value)}
+        />
+      </View>
+    </ScrollView>
+  );
+}
+
 // Theme-Farben für Dark Mode — vorher wurde `isDarkMode` nur für die
 // StatusBar-Icons genutzt, alle Text-/Rahmenfarben waren fest auf helle
 // Werte codiert (z.B. dunkelgraue Schrift ohne gesetzten Hintergrund),
 // dadurch auf einem dunklen System-Theme kaum lesbar (bestätigt auf echtem
 // Android-Gerät). `getStyles()` wird jetzt in jeder Screen-Komponente über
 // `useThemeColors()` neu berechnet, sobald sich `useColorScheme()` ändert.
+function computeThemeColors(isDarkMode: boolean) {
+  return {
+    isDarkMode,
+    background: isDarkMode ? '#121212' : '#fff',
+    text: isDarkMode ? '#f2f2f2' : '#111',
+    textMuted: isDarkMode ? '#aaaaaa' : '#666',
+    textSubtle: isDarkMode ? '#bbbbbb' : '#555',
+    chipText: isDarkMode ? '#e5e5e5' : '#333',
+    border: isDarkMode ? '#555' : '#ccc',
+    borderSubtle: isDarkMode ? '#333' : '#eee',
+    inputBackground: isDarkMode ? '#1e1e1e' : '#fff',
+    previewBackground: isDarkMode ? '#1e1e1e' : '#f2f2f2',
+    placeholder: isDarkMode ? '#888' : '#999',
+  };
+}
+
+// Respektiert den Dark-Mode-Override aus dem Settings-Tab (siehe
+// DarkModeOverrideContext), fällt ohne Override (Kontext fehlt — sollte in
+// der App nie vorkommen, App() setzt ihn immer) auf das System-Theme zurück.
 function useThemeColors() {
-  const isDarkMode = useColorScheme() === 'dark';
-  return useMemo(
-    () => ({
-      isDarkMode,
-      background: isDarkMode ? '#121212' : '#fff',
-      text: isDarkMode ? '#f2f2f2' : '#111',
-      textMuted: isDarkMode ? '#aaaaaa' : '#666',
-      textSubtle: isDarkMode ? '#bbbbbb' : '#555',
-      chipText: isDarkMode ? '#e5e5e5' : '#333',
-      border: isDarkMode ? '#555' : '#ccc',
-      borderSubtle: isDarkMode ? '#333' : '#eee',
-      inputBackground: isDarkMode ? '#1e1e1e' : '#fff',
-      previewBackground: isDarkMode ? '#1e1e1e' : '#f2f2f2',
-      placeholder: isDarkMode ? '#888' : '#999',
-    }),
-    [isDarkMode],
-  );
+  const systemIsDarkMode = useColorScheme() === 'dark';
+  const override = useContext(DarkModeOverrideContext);
+  const isDarkMode = override ? override.isDarkMode : systemIsDarkMode;
+  return useMemo(() => computeThemeColors(isDarkMode), [isDarkMode]);
 }
 
 function getStyles(colors: ReturnType<typeof useThemeColors>) {
