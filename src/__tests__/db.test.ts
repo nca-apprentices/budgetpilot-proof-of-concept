@@ -95,6 +95,8 @@ function makeItem(overrides: Partial<NewLineItem> = {}): NewLineItem {
     userEdited: false,
     notes: null,
     date: '2026-09-14',
+    photoFilename: null,
+    manuallyEditedFields: [],
     ...overrides,
   };
 }
@@ -125,24 +127,58 @@ describe('Migrationen', () => {
     );
   });
 
-  test('Migration 2 behält bestehende Zeilen bei einem Upgrade von Version 1', async () => {
+  test('Migrationen 2+3 behalten bestehende Zeilen bei einem Upgrade von Version 1', async () => {
     const db = createTestDb();
-    // Nur Migration 1 anwenden (der Zustand, in dem echte Geräte vor diesem
-    // Fix schon liefen), einen Posten anlegen, dann erst auf die aktuelle
-    // Version hochziehen.
+    // Nur Migration 1 anwenden (der Zustand, in dem echte Geräte vor diesen
+    // Fixes schon liefen) und die Zeile per Roh-SQL im damaligen v1-Schema
+    // anlegen — addLineItems()/makeItem() setzen inzwischen photo_filename/
+    // manually_edited_fields voraus (Migration 3), die zu diesem Zeitpunkt
+    // noch nicht existieren.
     await db.transaction(async tx => {
       for (const statement of MIGRATIONS[0].statements) {
         await tx.execute(statement);
       }
       await tx.execute('PRAGMA user_version = 1');
     });
-    await addLineItems(db, [makeItem({ id: 'vor-migration-2' })]);
+    const month = await getOrCreateMonth(db, '2026-09');
+    await db.execute(
+      `INSERT INTO line_items
+         (id, month_id, kind, description, amount_cents, currency, cadence,
+          category, source, confidence, reason, needs_input, user_edited,
+          notes, date, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'vor-migration-2',
+        month.id,
+        'fixed_cost',
+        'Miete',
+        120000,
+        'CHF',
+        'monthly',
+        'Wohnen',
+        'free_text',
+        0.92,
+        null,
+        0,
+        0,
+        null,
+        '2026-09-14',
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z',
+      ],
+    );
 
     await expect(migrate(db)).resolves.toBe(LATEST_SCHEMA_VERSION);
 
     const rows = await listLineItems(db);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ id: 'vor-migration-2', description: 'Miete' });
+    expect(rows[0]).toMatchObject({
+      id: 'vor-migration-2',
+      description: 'Miete',
+      // Migration 3 (ADD COLUMN): sinnvolle Defaults für alte Zeilen.
+      photoFilename: null,
+      manuallyEditedFields: [],
+    });
   });
 
   test('speichert und liest source "photo" korrekt zurück (fehlte in Migration 1s CHECK-Constraint und in isSource())', async () => {
@@ -153,6 +189,27 @@ describe('Migrationen', () => {
     // Ohne den Fix in isSource() würde ein unbekannter Wert still auf
     // 'manual' zurückfallen, statt den echten Wert durchzureichen.
     expect(row.source).toBe('photo');
+  });
+
+  test('speichert und liest photoFilename und manuallyEditedFields (Migration 3)', async () => {
+    const db = await freshDb();
+    await addLineItems(db, [
+      makeItem({
+        id: 'k1',
+        photoFilename: 'beleg-item-k1.jpg',
+        manuallyEditedFields: ['amount'],
+      }),
+      makeItem({ id: 'k2' }),
+    ]);
+
+    const rows = await listLineItems(db);
+    const withPhoto = rows.find(r => r.id === 'k1')!;
+    const withoutPhoto = rows.find(r => r.id === 'k2')!;
+    expect(withPhoto.photoFilename).toBe('beleg-item-k1.jpg');
+    expect(withPhoto.manuallyEditedFields).toEqual(['amount']);
+    // Default für Posten, die nie manuell korrigiert wurden.
+    expect(withoutPhoto.photoFilename).toBeNull();
+    expect(withoutPhoto.manuallyEditedFields).toEqual([]);
   });
 });
 
@@ -365,6 +422,20 @@ describe('updateLineItem', () => {
     expect(row.userEdited).toBe(true);
   });
 
+  test('schreibt photoFilename und manuallyEditedFields (JSON-Array-Spalte)', async () => {
+    const db = await freshDb();
+    await addLineItems(db, [makeItem({ id: 'k1' })]);
+
+    await updateLineItem(db, 'k1', {
+      photoFilename: 'beleg-item-k1.jpg',
+      manuallyEditedFields: ['amount', 'category'],
+    });
+
+    const [row] = await listLineItems(db);
+    expect(row.photoFilename).toBe('beleg-item-k1.jpg');
+    expect(row.manuallyEditedFields).toEqual(['amount', 'category']);
+  });
+
   test('nimmt die Zeile damit aus der Review-Liste', async () => {
     const db = await freshDb();
     await addLineItems(db, [
@@ -401,6 +472,8 @@ describe('Mapping UI <-> DB', () => {
     confidence: 0.81,
     notes: 'Kopfhörer sind Freizeitausgaben.',
     date: '2026-09-14',
+    photoFilename: null,
+    manuallyEditedFields: [],
   };
 
   test('Runde durch die DB verändert den Posten nicht', async () => {
@@ -450,6 +523,8 @@ describe('computeTotals stimmt mit computeBudget überein', () => {
         confidence: 0.9,
         notes: '',
         date: '2026-09-01',
+        photoFilename: null,
+        manuallyEditedFields: [],
       },
       {
         id: '2',
@@ -462,6 +537,8 @@ describe('computeTotals stimmt mit computeBudget überein', () => {
         confidence: 0.9,
         notes: '',
         date: '2026-09-03',
+        photoFilename: null,
+        manuallyEditedFields: [],
       },
       {
         id: '3',
@@ -474,6 +551,8 @@ describe('computeTotals stimmt mit computeBudget überein', () => {
         confidence: 0.8,
         notes: '',
         date: '2026-09-14',
+        photoFilename: null,
+        manuallyEditedFields: [],
       },
     ];
 

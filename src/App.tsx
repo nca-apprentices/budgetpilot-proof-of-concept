@@ -66,11 +66,15 @@ import {
   incomeToCents,
   incomeToChf,
   initDatabase,
+  kindFromCadence,
   listLineItems,
   monthOfDate,
+  parseChf,
   setIncomeCents,
   toNewLineItem,
   toUiLineItem,
+  updateLineItem,
+  type LineItemPatch,
   type SqlDatabase,
 } from './db';
 
@@ -334,17 +338,32 @@ function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Aufräum-Hilfsfunktionen für die nach RNFS.DocumentDirectoryPath kopierten
-// Beleg-Fotos (siehe processBelegUri) — dieser Ordner wird von Android/iOS
-// NICHT automatisch bereinigt (bewusst, siehe CLAUDE.md Lessons Learned zum
-// CachesDirectoryPath-Bug), daher braucht es eigene Lösch-Logik, damit sich
-// dort nicht unbegrenzt Datei-Leichen ansammeln.
-const BELEG_FILE_PREFIX = 'beleg-';
+// Aufräum-Hilfsfunktionen für Beleg-Fotos in RNFS.DocumentDirectoryPath —
+// dieser Ordner wird von Android/iOS NICHT automatisch bereinigt (bewusst,
+// siehe CLAUDE.md Lessons Learned zum CachesDirectoryPath-Bug).
+//
+// Zwei getrennte Namensräume mit unterschiedlicher Lebensdauer:
+// - "beleg-scan-…": ein frisch gescanntes/hochgeladenes Foto, bevor der
+//   Entwurf bestätigt wurde — reiner Zwischenstand, wird beim Bestätigen zum
+//   stabilen Dateinamen befördert (siehe processBelegUri/handleBestaetigen)
+//   oder beim Verwerfen gelöscht. Nur DIESER Namensraum wird von den
+//   Aufräum-Funktionen unten angefasst.
+// - "beleg-item-<id>.jpg": das dauerhafte Beleg-Foto eines bereits
+//   bestätigten Postens (LineItem.photoFilename) — bleibt erhalten, bis eine
+//   neue Quittung gescannt wird (ersetzt die Datei unter demselben Namen)
+//   oder der Posten gelöscht wird. Absichtlich ausserhalb der
+//   Aufräum-Funktionen, sonst würde z.B. das 24h-Sicherheitsnetz irgendwann
+//   echte, noch verknüpfte Beleg-Fotos löschen.
+const BELEG_TEMP_PREFIX = 'beleg-scan-';
 
-async function listBelegFiles() {
+function stableBelegFilename(itemId: string): string {
+  return `beleg-item-${itemId}.jpg`;
+}
+
+async function listTempBelegFiles() {
   try {
     const entries = await RNFS.readDir(RNFS.DocumentDirectoryPath);
-    return entries.filter(entry => entry.isFile() && entry.name.startsWith(BELEG_FILE_PREFIX));
+    return entries.filter(entry => entry.isFile() && entry.name.startsWith(BELEG_TEMP_PREFIX));
   } catch (e) {
     console.error('[beleg-cleanup] Verzeichnis konnte nicht gelesen werden:', e);
     return [];
@@ -362,20 +381,21 @@ async function deleteBelegFile(path: string): Promise<void> {
   }
 }
 
-// Vor jedem neuen Beleg-Foto alle bisherigen löschen: pro Zeitpunkt ist immer
-// nur ein Entwurf aktiv (siehe CLAUDE.md Status, "bewusst ohne Persistenz"),
-// eine übrig gebliebene ältere Kopie kann also nur von einem vorherigen
-// Absturz/Fast-Refresh-Reload stammen.
-async function cleanupAllBelegFiles(): Promise<void> {
-  const files = await listBelegFiles();
+// Vor jedem neuen Scan alle bisherigen Zwischenstände löschen: pro Zeitpunkt
+// ist immer nur ein Entwurf aktiv (siehe CLAUDE.md Status, "bewusst ohne
+// Persistenz"), eine übrig gebliebene ältere Temp-Datei kann also nur von
+// einem vorherigen Absturz/Fast-Refresh-Reload stammen.
+async function cleanupTempBelegFiles(): Promise<void> {
+  const files = await listTempBelegFiles();
   await Promise.all(files.map(file => deleteBelegFile(file.path)));
 }
 
-// Sicherheitsnetz beim App-Start (siehe App()): fängt Datei-Leichen ab, falls
-// das Löschen beim Verwerfen/Bestätigen (handleVerwerfen/handleBestaetigen)
-// mal durch einen Absturz übersprungen wurde.
-async function cleanupOldBelegFiles(maxAgeMs: number): Promise<void> {
-  const files = await listBelegFiles();
+// Sicherheitsnetz beim App-Start (siehe App()): fängt Temp-Datei-Leichen ab,
+// falls das Löschen beim Verwerfen/Bestätigen mal durch einen Absturz
+// übersprungen wurde. Betrifft NICHT die dauerhaften Beleg-Fotos bestätigter
+// Posten (siehe Kommentar oben) — die haben kein Alterslimit.
+async function cleanupOldTempBelegFiles(maxAgeMs: number): Promise<void> {
+  const files = await listTempBelegFiles();
   const cutoff = Date.now() - maxAgeMs;
   const stale = files.filter(file => file.mtime !== undefined && file.mtime.getTime() < cutoff);
   await Promise.all(stale.map(file => deleteBelegFile(file.path)));
@@ -463,6 +483,13 @@ function App() {
   // Datum, das per Antippen im Kalender vorausgewählt wurde — füllt das
   // Kaufdatum im nächsten Entwurf vor, wird danach sofort wieder geleert.
   const [prefilledDate, setPrefilledDate] = useState<string | null>(null);
+  // Posten, der per Antippen im Budget-Tab zum Bearbeiten geöffnet wurde —
+  // wechselt den Tab zu "Ausgabe erfassen" und wird dort sofort konsumiert
+  // (analog zu prefilledDate). Für den Kalender-Tag-Detail-Fall (Antippen
+  // eines Postens in der existingItemsForDate-Liste) läuft der Sprung direkt
+  // innerhalb von ExpenseFlow, ohne über diesen State zu gehen — dort ist
+  // man ja schon auf dem richtigen Tab.
+  const [itemToEdit, setItemToEdit] = useState<LineItem | null>(null);
   // Erst bei 'ready' rendern wir die Tabs — sonst würde BudgetScreen sein
   // Einkommens-Textfeld aus einem noch leeren `income` initialisieren und der
   // geladene Wert käme nie im Feld an.
@@ -520,6 +547,59 @@ function App() {
     });
   };
 
+  // Bearbeiten eines bereits bestätigten Postens (z.B. falsche Quittung
+  // gescannt) — im Unterschied zu addItem() ein UPDATE, kein INSERT.
+  // Optimistisch wie addItem(): der Posten ändert sich sofort in der Liste,
+  // bei einem Fehler wird der alte Stand wiederhergestellt.
+  const updateItem = (id: string, patch: Partial<LineItem>) => {
+    const previous = items.find(existing => existing.id === id) ?? null;
+    setItems(prev =>
+      prev.map(existing => (existing.id === id ? { ...existing, ...patch } : existing)),
+    );
+    const db = dbRef.current;
+    if (!db) {
+      return;
+    }
+    // Nur Felder mappen, die LineItemPatch tatsächlich unterstützt (siehe
+    // db/repository.ts) — source/confidence/reason bleiben bewusst
+    // unangetastet, damit lokaler State und DB nicht auseinanderlaufen.
+    const dbPatch: LineItemPatch = { needsInput: false };
+    if (patch.description !== undefined) {
+      dbPatch.description = patch.description;
+    }
+    if (patch.amount !== undefined) {
+      dbPatch.amountCents = patch.amount === null ? null : parseChf(patch.amount);
+    }
+    if (patch.currency !== undefined) {
+      dbPatch.currency = patch.currency;
+    }
+    if (patch.cadence !== undefined) {
+      dbPatch.cadence = patch.cadence;
+      dbPatch.kind = kindFromCadence(patch.cadence);
+    }
+    if (patch.category !== undefined) {
+      dbPatch.category = patch.category;
+    }
+    if (patch.date !== undefined) {
+      dbPatch.date = patch.date;
+    }
+    if (patch.photoFilename !== undefined) {
+      dbPatch.photoFilename = patch.photoFilename;
+    }
+    if (patch.manuallyEditedFields !== undefined) {
+      dbPatch.manuallyEditedFields = patch.manuallyEditedFields;
+    }
+    updateLineItem(db, id, dbPatch).catch(e => {
+      console.error('[db] Änderung nicht gespeichert:', e);
+      if (previous) {
+        setItems(prev => prev.map(existing => (existing.id === id ? previous : existing)));
+      }
+      setDbError(
+        `"${previous?.description ?? 'Posten'}" konnte nicht aktualisiert werden.`,
+      );
+    });
+  };
+
   const changeIncome = (next: number | null) => {
     setIncome(next);
     const db = dbRef.current;
@@ -534,11 +614,12 @@ function App() {
     );
   };
 
-  // Sicherheitsnetz: fängt liegen gebliebene Beleg-Foto-Kopien ab, falls das
-  // Löschen beim Verwerfen/Bestätigen mal durch einen Absturz oder
-  // Fast-Refresh-Reload übersprungen wurde (siehe cleanupOldBelegFiles).
+  // Sicherheitsnetz: fängt liegen gebliebene Scan-Zwischenstände ab, falls
+  // das Löschen beim Verwerfen/Bestätigen mal durch einen Absturz oder
+  // Fast-Refresh-Reload übersprungen wurde (siehe cleanupOldTempBelegFiles).
+  // Betrifft nicht die dauerhaften Beleg-Fotos bestätigter Posten.
   useEffect(() => {
-    cleanupOldBelegFiles(24 * 60 * 60 * 1000);
+    cleanupOldTempBelegFiles(24 * 60 * 60 * 1000);
   }, []);
 
   if (dbStatus !== 'ready') {
@@ -578,8 +659,11 @@ function App() {
             model={model}
             items={items}
             onConfirmItem={addItem}
+            onUpdateItem={updateItem}
             prefilledDate={prefilledDate}
             onPrefilledDateConsumed={() => setPrefilledDate(null)}
+            itemToEdit={itemToEdit}
+            onItemEditConsumed={() => setItemToEdit(null)}
           />
         )}
         {screen === 'budget' && (
@@ -588,6 +672,10 @@ function App() {
             income={income}
             onChangeIncome={changeIncome}
             items={items}
+            onEditItem={item => {
+              setItemToEdit(item);
+              setScreen('expense');
+            }}
           />
         )}
         {screen === 'calendar' && (
@@ -656,14 +744,20 @@ function ExpenseFlow({
   model,
   items,
   onConfirmItem,
+  onUpdateItem,
   prefilledDate,
   onPrefilledDateConsumed,
+  itemToEdit,
+  onItemEditConsumed,
 }: {
   model: UseModelResult;
   items: LineItem[];
   onConfirmItem: (item: LineItem) => void;
+  onUpdateItem: (id: string, patch: Partial<LineItem>) => void;
   prefilledDate: string | null;
   onPrefilledDateConsumed: () => void;
+  itemToEdit: LineItem | null;
+  onItemEditConsumed: () => void;
 }) {
   const {
     isReady,
@@ -686,8 +780,27 @@ function ExpenseFlow({
   const [draftInitialDate, setDraftInitialDate] = useState(todayIso());
   const [draftSource, setDraftSource] = useState<Source>('free_text');
   const [draftPhotoUri, setDraftPhotoUri] = useState<string | null>(null);
+  // Pfad (nicht file://-URI) einer frisch gescannten, noch nicht bestätigten
+  // Beleg-Kopie unter dem "beleg-scan-…"-Namen — null, solange draftPhotoUri
+  // (falls gesetzt) nur das bereits gespeicherte Foto eines bearbeiteten
+  // Postens zeigt. Entscheidet in handleVerwerfen, ob überhaupt eine
+  // Temp-Datei zu löschen ist (das dauerhafte Foto eines Postens darf beim
+  // blossen Verwerfen nie gelöscht werden, siehe dort), und in
+  // handleBestaetigen, ob ein neues Foto zum stabilen Dateinamen befördert
+  // werden muss.
+  const [pendingPhotoTempPath, setPendingPhotoTempPath] = useState<string | null>(null);
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Der komplette Original-Posten, solange der Entwurf-Screen ihn bearbeitet
+  // statt einen neuen zu erfassen — liefert id/photoFilename/
+  // manuallyEditedFields als Ausgangspunkt für handleBestaetigen. null bei
+  // einer neuen Erfassung.
+  const [editingItem, setEditingItem] = useState<LineItem | null>(null);
+  // Erzwingt einen Remount von DraftScreen (siehe key={draftVersion} unten),
+  // damit dessen lokaler State (TextInput-Werte) neu aus draft/initialDate
+  // initialisiert wird — auch wenn man auf demselben Screen bleibt, z.B.
+  // nach "Neue Quittung" während einer Bearbeitung.
+  const [draftVersion, setDraftVersion] = useState(0);
   // Modell-Ladefehler (z.B. MemoryError) sind sonst unsichtbar — der Screen
   // bliebe endlos bei "Modell wird geladen…" hängen, ohne dass der Nutzer
   // erfährt, dass das Laden bereits fehlgeschlagen ist.
@@ -708,6 +821,7 @@ function ExpenseFlow({
       onPrefilledDateConsumed();
       setDraftSource('free_text');
       setDraftPhotoUri(null);
+      setDraftVersion(v => v + 1);
       setStep('draft');
     } catch (e) {
       console.error('[extraction] Fehler:', e);
@@ -738,16 +852,17 @@ function ExpenseFlow({
       // installd, ca. alle 60s beobachtet) automatisch älteste Dateien
       // purgt — inklusive unserer gerade erst kopierten Beleg-Datei, bevor
       // der Entwurf-Screen sie anzeigen konnte (bestätigt per Logcat).
-      // Alte Beleg-Kopien zuerst löschen (siehe cleanupAllBelegFiles) — sonst
-      // sammeln sich in DocumentDirectoryPath unbegrenzt Dateien an, da
-      // dieser Ordner (bewusst, anders als CachesDirectoryPath) nicht vom OS
-      // automatisch bereinigt wird.
-      await cleanupAllBelegFiles();
-      const persistentPath = `${RNFS.DocumentDirectoryPath}/beleg-${Date.now()}.jpg`;
-      await RNFS.copyFile(uri.replace('file://', ''), persistentPath);
-      const persistentUri = `file://${persistentPath}`;
+      // Alte Scan-Zwischenstände zuerst löschen (siehe cleanupTempBelegFiles)
+      // — sonst sammeln sich in DocumentDirectoryPath unbegrenzt Dateien an,
+      // da dieser Ordner (bewusst, anders als CachesDirectoryPath) nicht vom
+      // OS automatisch bereinigt wird. Betrifft nur den "beleg-scan-…"-Namensraum,
+      // nicht die dauerhaften Beleg-Fotos bereits bestätigter Posten.
+      await cleanupTempBelegFiles();
+      const tempPath = `${RNFS.DocumentDirectoryPath}/${BELEG_TEMP_PREFIX}${Date.now()}.jpg`;
+      await RNFS.copyFile(uri.replace('file://', ''), tempPath);
+      const tempUri = `file://${tempPath}`;
 
-      const ocrText = await recognizeReceiptText(persistentUri);
+      const ocrText = await recognizeReceiptText(tempUri);
       console.log('[extraction-photo] OCR-Text:', ocrText);
       // Wie beim Freitext-Pfad: jede Extraktion ist eine unabhängige
       // Einzelanfrage, sonst hängt sie an der Konversationshistorie
@@ -767,10 +882,25 @@ function ExpenseFlow({
         photoDraft.currency = 'CHF';
       }
       setDraft(photoDraft);
-      setDraftInitialDate(prefilledDate ?? todayIso());
-      onPrefilledDateConsumed();
+      // Beim erneuten Scannen während einer Bearbeitung (siehe "Neue
+      // Quittung" in DraftScreen) bleibt das Kaufdatum des bearbeiteten
+      // Postens erhalten, statt es auf heute/prefilledDate zurückzusetzen —
+      // hier geht es nur darum, die falsche Quittung zu ersetzen, nicht um
+      // ein neues Datum.
+      if (editingItem) {
+        // Neue Quittung = neue Baseline: eine vorher persistierte
+        // "(manuell geändert)"-Markierung bezog sich auf die ALTE
+        // KI-Extraktion und gilt gegenüber dieser neuen nicht mehr (siehe
+        // persistedManuallyEditedFields in DraftScreen).
+        setEditingItem({ ...editingItem, manuallyEditedFields: [] });
+      } else {
+        setDraftInitialDate(prefilledDate ?? todayIso());
+        onPrefilledDateConsumed();
+      }
       setDraftSource('photo');
-      setDraftPhotoUri(persistentUri);
+      setDraftPhotoUri(tempUri);
+      setPendingPhotoTempPath(tempPath);
+      setDraftVersion(v => v + 1);
       setStep('draft');
     } catch (e) {
       console.error('[extraction-photo] Fehler:', e);
@@ -817,48 +947,135 @@ function ExpenseFlow({
   };
 
   const handleVerwerfen = () => {
-    // Zugehöriges Beleg-Foto sofort löschen, statt bis zum nächsten
-    // Foto-Erfassungsvorgang zu warten (siehe cleanupAllBelegFiles).
-    if (draftPhotoUri) {
-      deleteBelegFile(draftPhotoUri.replace('file://', ''));
+    // Nur eine frisch gescannte, noch nicht bestätigte Temp-Datei löschen —
+    // das dauerhafte Beleg-Foto eines bearbeiteten Postens (falls
+    // draftPhotoUri darauf zeigt) bleibt beim blossen Verwerfen unangetastet.
+    if (pendingPhotoTempPath) {
+      deleteBelegFile(pendingPhotoTempPath);
     }
     setDraft(null);
     setDraftPhotoUri(null);
+    setPendingPhotoTempPath(null);
+    setEditingItem(null);
     setStep('entry');
   };
 
-  const handleBestaetigen = (finalDraft: Draft, date: string) => {
-    const item: LineItem = {
-      id: createId(),
-      description: finalDraft.description,
-      amount: finalDraft.amount,
-      currency: finalDraft.currency,
-      cadence: finalDraft.cadence,
-      category: finalDraft.category,
-      source: draftSource,
-      confidence: finalDraft.confidence,
-      notes: finalDraft.reason,
-      date,
-    };
-    console.log('[expense] Bestätigt:', item);
-    onConfirmItem(item);
-    // Zugehöriges Beleg-Foto wird nach dem Bestätigen nicht mehr gebraucht
-    // (siehe cleanupAllBelegFiles) — nur zur Anzeige im Entwurf-Screen nötig.
-    if (draftPhotoUri) {
-      deleteBelegFile(draftPhotoUri.replace('file://', ''));
+  const handleBestaetigen = async (
+    finalDraft: Draft,
+    date: string,
+    changedFieldsThisSession: string[],
+  ) => {
+    const id = editingItem?.id ?? createId();
+    // Union statt Ersetzen: ein Feld, das in einer früheren Session schon
+    // manuell geändert wurde, bleibt markiert, auch wenn es diesmal nicht
+    // angefasst wurde.
+    const manuallyEditedFields = Array.from(
+      new Set([...(editingItem?.manuallyEditedFields ?? []), ...changedFieldsThisSession]),
+    );
+
+    // Frisch gescanntes Foto zum dauerhaften, postenspezifischen Dateinamen
+    // befördern — ersetzt dabei ein evtl. vorhandenes altes Foto desselben
+    // Postens (identischer Dateiname, siehe stableBelegFilename), da "Neue
+    // Quittung" die alte Quittung ersetzen soll, nicht danebenlegen.
+    let photoFilename = editingItem?.photoFilename ?? null;
+    if (pendingPhotoTempPath) {
+      const stablePath = `${RNFS.DocumentDirectoryPath}/${stableBelegFilename(id)}`;
+      await deleteBelegFile(stablePath);
+      try {
+        await RNFS.moveFile(pendingPhotoTempPath, stablePath);
+        photoFilename = stableBelegFilename(id);
+      } catch (e) {
+        console.error('[expense] Beleg-Foto konnte nicht übernommen werden:', e);
+      }
+    }
+
+    if (editingItem) {
+      onUpdateItem(editingItem.id, {
+        description: finalDraft.description,
+        amount: finalDraft.amount,
+        currency: finalDraft.currency,
+        cadence: finalDraft.cadence,
+        category: finalDraft.category,
+        date,
+        photoFilename,
+        manuallyEditedFields,
+      });
+    } else {
+      const item: LineItem = {
+        id,
+        description: finalDraft.description,
+        amount: finalDraft.amount,
+        currency: finalDraft.currency,
+        cadence: finalDraft.cadence,
+        category: finalDraft.category,
+        source: draftSource,
+        confidence: finalDraft.confidence,
+        notes: finalDraft.reason,
+        date,
+        photoFilename,
+        manuallyEditedFields,
+      };
+      console.log('[expense] Bestätigt:', item);
+      onConfirmItem(item);
     }
     setDraft(null);
     setDraftPhotoUri(null);
+    setPendingPhotoTempPath(null);
+    setEditingItem(null);
     setText('');
     setStep('entry');
   };
 
+  // Öffnet einen bereits bestätigten Posten wieder im Entwurf-Screen — z.B.
+  // wenn beim Foto-Erfassen die falsche Quittung ausgewählt wurde. Zeigt das
+  // dauerhaft gespeicherte Beleg-Foto des Postens (falls vorhanden) direkt an
+  // — ersetzt wird es erst, wenn im Entwurf-Screen "Neue Quittung" ausgeführt
+  // wird (siehe processBelegUri/handleBestaetigen).
+  const beginEditItem = (item: LineItem) => {
+    setDraft({
+      description: item.description,
+      amount: item.amount,
+      currency: item.currency,
+      cadence: item.cadence,
+      category: item.category,
+      confidence: item.confidence,
+      reason: item.notes,
+    });
+    setDraftInitialDate(item.date);
+    setDraftSource(item.source);
+    setDraftPhotoUri(
+      item.photoFilename
+        ? `file://${RNFS.DocumentDirectoryPath}/${item.photoFilename}`
+        : null,
+    );
+    setPendingPhotoTempPath(null);
+    setEditingItem(item);
+    setDraftVersion(v => v + 1);
+    setStep('draft');
+  };
+
+  // Kommt vom Budget-Tab (siehe itemToEdit/onItemEditConsumed in App()) —
+  // der Kalender-Tag-Detail-Fall ruft beginEditItem direkt auf, da man dort
+  // schon auf diesem Screen ist.
+  useEffect(() => {
+    if (itemToEdit) {
+      beginEditItem(itemToEdit);
+      onItemEditConsumed();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemToEdit]);
+
   if (step === 'draft' && draft) {
     return (
       <DraftScreen
+        key={draftVersion}
         draft={draft}
         initialDate={draftInitialDate}
         photoUri={draftPhotoUri}
+        isEditing={editingItem !== null}
+        persistedManuallyEditedFields={editingItem?.manuallyEditedFields ?? []}
+        isProcessingPhoto={isProcessingPhoto}
+        onRescan={handleFoto}
         onConfirm={handleBestaetigen}
         onDiscard={handleVerwerfen}
       />
@@ -877,6 +1094,7 @@ function ExpenseFlow({
       error={displayError}
       prefilledDate={prefilledDate}
       existingItemsForDate={existingItemsForDate}
+      onEditItem={beginEditItem}
     />
   );
 }
@@ -892,6 +1110,7 @@ function EntryScreen({
   error,
   prefilledDate,
   existingItemsForDate,
+  onEditItem,
 }: {
   text: string;
   onChangeText: (t: string) => void;
@@ -903,6 +1122,7 @@ function EntryScreen({
   error: string | null;
   prefilledDate: string | null;
   existingItemsForDate: LineItem[];
+  onEditItem: (item: LineItem) => void;
 }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -950,10 +1170,15 @@ function EntryScreen({
       {existingItemsForDate.length > 0 && (
         <>
           <Text style={styles.label}>
-            Bereits erfasst für {formatDateDMY(prefilledDate as string)}:
+            Bereits erfasst für {formatDateDMY(prefilledDate as string)} (antippen zum
+            Bearbeiten):
           </Text>
           {existingItemsForDate.map(item => (
-            <View key={item.id} style={styles.lineItemRow}>
+            <Pressable
+              key={item.id}
+              style={styles.lineItemRow}
+              onPress={() => onEditItem(item)}
+            >
               <Text style={styles.lineItemDescription}>{item.description}</Text>
               <Text style={styles.lineItemMeta}>
                 {item.amount !== null
@@ -962,7 +1187,7 @@ function EntryScreen({
                 · {item.category ?? 'Sonstiges'} ·{' '}
                 {item.cadence === 'monthly' ? 'Fixkosten' : 'Einmalig'}
               </Text>
-            </View>
+            </Pressable>
           ))}
         </>
       )}
@@ -991,13 +1216,21 @@ function DraftScreen({
   draft,
   initialDate,
   photoUri,
+  isEditing,
+  persistedManuallyEditedFields,
+  isProcessingPhoto,
+  onRescan,
   onConfirm,
   onDiscard,
 }: {
   draft: Draft;
   initialDate: string;
   photoUri: string | null;
-  onConfirm: (d: Draft, date: string) => void;
+  isEditing: boolean;
+  persistedManuallyEditedFields: string[];
+  isProcessingPhoto: boolean;
+  onRescan: () => void;
+  onConfirm: (d: Draft, date: string, changedFields: string[]) => void;
   onDiscard: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -1030,6 +1263,49 @@ function DraftScreen({
     needsInput && styles.needsInputBorder,
   ];
 
+  // Vergleich gegen die KI-Extraktion (draft/initialDate) dieser Session —
+  // zeigt sofort "(manuell geändert)", sobald der User ein Feld anfasst,
+  // statt erst nach dem Bestätigen. Vereinigt mit den aus einer früheren
+  // Session schon persistierten Feldern (persistedManuallyEditedFields), da
+  // ein nicht erneut angefasstes Feld seine Markierung behalten soll.
+  const changedFieldsThisSession = useMemo(() => {
+    const changed: string[] = [];
+    if (description.trim() !== draft.description) {
+      changed.push('description');
+    }
+    if (parsedAmount !== draft.amount) {
+      changed.push('amount');
+    }
+    if ((currency.trim() || 'CHF') !== draft.currency) {
+      changed.push('currency');
+    }
+    if (cadence !== draft.cadence) {
+      changed.push('cadence');
+    }
+    if (category !== draft.category) {
+      changed.push('category');
+    }
+    if (dateText !== formatDateDMY(initialDate)) {
+      changed.push('date');
+    }
+    return changed;
+  }, [description, parsedAmount, currency, cadence, category, dateText, draft, initialDate]);
+
+  const effectiveManuallyEditedFields = useMemo(
+    () =>
+      Array.from(new Set([...persistedManuallyEditedFields, ...changedFieldsThisSession])),
+    [persistedManuallyEditedFields, changedFieldsThisSession],
+  );
+
+  const fieldLabel = (text: string, field: string) => (
+    <Text style={styles.label}>
+      {text}
+      {effectiveManuallyEditedFields.includes(field) && (
+        <Text style={styles.manualEditBadge}> (manuell geändert)</Text>
+      )}
+    </Text>
+  );
+
   return (
     <ScrollView
       style={styles.container}
@@ -1039,7 +1315,9 @@ function DraftScreen({
         paddingHorizontal: 20,
       }}
     >
-      <Text style={styles.title}>Entwurf bestätigen</Text>
+      <Text style={styles.title}>
+        {isEditing ? 'Entwurf bearbeiten' : 'Entwurf bestätigen'}
+      </Text>
       {draft.confidence !== null && (
         <Text style={styles.status}>
           Vertrauen der KI-Extraktion: {Math.round(draft.confidence * 100)}%
@@ -1054,7 +1332,19 @@ function DraftScreen({
         />
       )}
 
-      <Text style={styles.label}>Beschreibung</Text>
+      {isEditing && (
+        <View style={styles.buttonRow}>
+          <View style={styles.buttonWrapper}>
+            <Button
+              title={isProcessingPhoto ? 'Analysiere…' : '📷 Neue Quittung'}
+              onPress={onRescan}
+              disabled={isProcessingPhoto}
+            />
+          </View>
+        </View>
+      )}
+
+      {fieldLabel('Beschreibung', 'description')}
       <TextInput
         style={fieldStyle(false)}
         value={description}
@@ -1063,7 +1353,7 @@ function DraftScreen({
         placeholderTextColor={colors.placeholder}
       />
 
-      <Text style={styles.label}>Betrag</Text>
+      {fieldLabel('Betrag', 'amount')}
       <TextInput
         style={fieldStyle(amountNeedsInput)}
         value={amountText}
@@ -1076,7 +1366,7 @@ function DraftScreen({
         <Text style={styles.needsInputHint}>Bitte Betrag ausfüllen.</Text>
       )}
 
-      <Text style={styles.label}>Währung</Text>
+      {fieldLabel('Währung', 'currency')}
       <TextInput
         style={styles.input}
         value={currency}
@@ -1085,7 +1375,7 @@ function DraftScreen({
         placeholderTextColor={colors.placeholder}
       />
 
-      <Text style={styles.label}>Häufigkeit</Text>
+      {fieldLabel('Häufigkeit', 'cadence')}
       <View
         style={[styles.segmentRow, lowConfidence && styles.lowConfidenceBorder]}
       >
@@ -1123,7 +1413,7 @@ function DraftScreen({
         </Pressable>
       </View>
 
-      <Text style={styles.label}>Kategorie</Text>
+      {fieldLabel('Kategorie', 'category')}
       <View
         style={[
           styles.chipContainer,
@@ -1152,7 +1442,7 @@ function DraftScreen({
         <Text style={styles.needsInputHint}>Bitte Kategorie auswählen.</Text>
       )}
 
-      <Text style={styles.label}>Kaufdatum</Text>
+      {fieldLabel('Kaufdatum', 'date')}
       <TextInput
         style={styles.input}
         value={dateText}
@@ -1179,6 +1469,7 @@ function DraftScreen({
                   reason: draft.reason,
                 },
                 parseDateDMY(dateText) ?? todayIso(),
+                changedFieldsThisSession,
               )
             }
           />
@@ -1196,11 +1487,13 @@ function BudgetScreen({
   income,
   onChangeIncome,
   items,
+  onEditItem,
 }: {
   model: UseModelResult;
   income: number | null;
   onChangeIncome: (income: number | null) => void;
   items: LineItem[];
+  onEditItem: (item: LineItem) => void;
 }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1280,14 +1573,18 @@ function BudgetScreen({
       {fixedCosts.length === 0 ? (
         <Text style={styles.status}>Noch keine erfasst.</Text>
       ) : (
-        fixedCosts.map(item => <LineItemRow key={item.id} item={item} />)
+        fixedCosts.map(item => (
+          <LineItemRow key={item.id} item={item} onPress={() => onEditItem(item)} />
+        ))
       )}
 
       <Text style={styles.label}>Geplante Käufe (einmalig)</Text>
       {plannedPurchases.length === 0 ? (
         <Text style={styles.status}>Noch keine erfasst.</Text>
       ) : (
-        plannedPurchases.map(item => <LineItemRow key={item.id} item={item} />)
+        plannedPurchases.map(item => (
+          <LineItemRow key={item.id} item={item} onPress={() => onEditItem(item)} />
+        ))
       )}
 
       <Text style={styles.label}>Zusammenfassung</Text>
@@ -1341,11 +1638,11 @@ function BudgetScreen({
   );
 }
 
-function LineItemRow({ item }: { item: LineItem }) {
+function LineItemRow({ item, onPress }: { item: LineItem; onPress: () => void }) {
   const colors = useThemeColors();
   const styles = useMemo(() => getStyles(colors), [colors]);
   return (
-    <View style={styles.lineItemRow}>
+    <Pressable style={styles.lineItemRow} onPress={onPress}>
       <Text style={styles.lineItemDescription}>{item.description}</Text>
       <Text style={styles.lineItemMeta}>
         {item.amount !== null
@@ -1353,7 +1650,7 @@ function LineItemRow({ item }: { item: LineItem }) {
           : '—'}{' '}
         · {item.category ?? 'Sonstiges'}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -2062,6 +2359,12 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       fontWeight: '600',
       marginTop: 12,
       color: colors.text,
+    },
+    manualEditBadge: {
+      fontSize: 12,
+      fontWeight: '400',
+      fontStyle: 'italic',
+      color: colors.textMuted,
     },
     input: {
       fontSize: 14,

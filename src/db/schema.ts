@@ -131,6 +131,32 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX idx_line_items_date ON line_items(date)`,
     ],
   },
+  {
+    // Zwei neue, jeweils nullable/mit Default versehene Spalten — anders als
+    // Migration 2 (CHECK-Constraint-Fix) reicht hier ein einfaches ADD COLUMN,
+    // kein Tabellen-Rebuild nötig.
+    //
+    // photo_filename: Dateiname (nicht Pfad — DocumentDirectoryPath kann sich
+    // zwischen App-Versionen/Neuinstallationen ändern, siehe App.tsx) des
+    // Beleg-Fotos, das zu diesem Posten gehört. Anders als der frühere
+    // Zwischenstand (Beleg-Foto wurde direkt nach dem Bestätigen gelöscht)
+    // bleibt es jetzt so lange erhalten, bis es entweder durch eine neu
+    // gescannte Quittung ersetzt (siehe "Neue Quittung" im Entwurf-Screen)
+    // oder der Posten selbst gelöscht wird.
+    //
+    // manually_edited_fields: JSON-Array der Feldnamen (description/amount/
+    // currency/cadence/category/date), die der User gegenüber der letzten
+    // KI-Extraktion von Hand geändert hat — damit im Entwurf-Screen z. B.
+    // "Betrag (manuell geändert)" steht, statt Monate später fälschlich nach
+    // einem KI-Erkennungsfehler auszusehen. Wird bei jeder neuen Extraktion
+    // (Freitext oder frisch gescannte Quittung) wieder auf [] zurückgesetzt,
+    // siehe App.tsx.
+    version: 3,
+    statements: [
+      `ALTER TABLE line_items ADD COLUMN photo_filename TEXT`,
+      `ALTER TABLE line_items ADD COLUMN manually_edited_fields TEXT NOT NULL DEFAULT '[]'`,
+    ],
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS.length;

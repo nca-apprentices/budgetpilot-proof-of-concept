@@ -49,4 +49,13 @@ export type LineItem = {
   // ISO-Datum (YYYY-MM-DD) — vom Nutzer im Entwurf-Screen frei editierbar,
   // nicht vom Modell extrahiert (die KI liefert kein Datum).
   date: string;
+  // Dateiname des zugehörigen Beleg-Fotos (in RNFS.DocumentDirectoryPath),
+  // oder null ohne Foto — bleibt erhalten, bis eine neue Quittung gescannt
+  // oder der Posten gelöscht wird (siehe App.tsx processBelegUri).
+  photoFilename: string | null;
+  // Feldnamen, die von Hand gegenüber der letzten KI-Extraktion geändert
+  // wurden (z.B. ["amount"]) — zeigt "(manuell geändert)" im Entwurf-Screen,
+  // damit ein von der KI abweichender Wert nicht wie ein Erkennungsfehler
+  // aussieht. Wird bei jeder neuen Extraktion zurückgesetzt.
+  manuallyEditedFields: string[];
 };

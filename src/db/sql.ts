@@ -64,3 +64,27 @@ export function readBoolean(value: unknown): boolean {
 export function toSqlBoolean(value: boolean): number {
   return value ? 1 : 0;
 }
+
+/**
+ * SQLite kennt keinen Array-Typ — gespeichert wird JSON-Text. Genutzt für
+ * `line_items.manually_edited_fields` (siehe schema.ts Migration 3). Ein
+ * defekter/leerer Wert fällt auf ein leeres Array zurück statt zu werfen —
+ * gleiche Vorsicht wie bei den anderen read*-Helfern hier.
+ */
+export function readStringArray(value: unknown): string[] {
+  if (typeof value !== 'string') {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every(v => typeof v === 'string')
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function toSqlStringArray(value: string[]): string {
+  return JSON.stringify(value);
+}

@@ -17,6 +17,8 @@ function makeItem(overrides: Partial<LineItem>): LineItem {
     confidence: 0.9,
     notes: '',
     date: '2026-01-01',
+    photoFilename: null,
+    manuallyEditedFields: [],
     ...overrides,
   };
 }
