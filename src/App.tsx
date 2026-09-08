@@ -62,6 +62,7 @@ import {
 } from './goldenSet';
 import {
   addLineItems,
+  deleteLineItem,
   getMonth,
   incomeToCents,
   incomeToChf,
@@ -600,6 +601,25 @@ function App() {
     });
   };
 
+  // Löscht einen Posten unwiderruflich, inkl. seines dauerhaften Beleg-Fotos
+  // (falls vorhanden) — der Bestätigungs-Dialog dafür läuft in ExpenseFlow
+  // (handleLoeschen), hier nur noch die eigentliche Ausführung.
+  const deleteItem = (item: LineItem) => {
+    setItems(prev => prev.filter(existing => existing.id !== item.id));
+    if (item.photoFilename) {
+      deleteBelegFile(`${RNFS.DocumentDirectoryPath}/${item.photoFilename}`);
+    }
+    const db = dbRef.current;
+    if (!db) {
+      return;
+    }
+    deleteLineItem(db, item.id).catch(e => {
+      console.error('[db] Posten nicht gelöscht:', e);
+      setItems(prev => [...prev, item]);
+      setDbError(`"${item.description}" konnte nicht gelöscht werden.`);
+    });
+  };
+
   const changeIncome = (next: number | null) => {
     setIncome(next);
     const db = dbRef.current;
@@ -660,6 +680,7 @@ function App() {
             items={items}
             onConfirmItem={addItem}
             onUpdateItem={updateItem}
+            onDeleteItem={deleteItem}
             prefilledDate={prefilledDate}
             onPrefilledDateConsumed={() => setPrefilledDate(null)}
             itemToEdit={itemToEdit}
@@ -745,6 +766,7 @@ function ExpenseFlow({
   items,
   onConfirmItem,
   onUpdateItem,
+  onDeleteItem,
   prefilledDate,
   onPrefilledDateConsumed,
   itemToEdit,
@@ -754,6 +776,7 @@ function ExpenseFlow({
   items: LineItem[];
   onConfirmItem: (item: LineItem) => void;
   onUpdateItem: (id: string, patch: Partial<LineItem>) => void;
+  onDeleteItem: (item: LineItem) => void;
   prefilledDate: string | null;
   onPrefilledDateConsumed: () => void;
   itemToEdit: LineItem | null;
@@ -960,6 +983,40 @@ function ExpenseFlow({
     setStep('entry');
   };
 
+  // Löscht den gerade bearbeiteten Posten unwiderruflich — nur im
+  // Bearbeiten-Modus erreichbar (siehe DraftScreen), daher kein Check auf
+  // editingItem !== null hier nötig, der Button existiert sonst nicht.
+  const handleLoeschen = () => {
+    if (!editingItem) {
+      return;
+    }
+    Alert.alert(
+      'Posten löschen',
+      `"${editingItem.description}" wirklich unwiderruflich löschen?`,
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Löschen',
+          style: 'destructive',
+          onPress: () => {
+            // Ein evtl. frisch gescannter, noch nicht bestätigter
+            // Zwischenstand gehört nicht zum gelöschten Posten und wird
+            // separat aufgeräumt, statt verwaist liegen zu bleiben.
+            if (pendingPhotoTempPath) {
+              deleteBelegFile(pendingPhotoTempPath);
+            }
+            onDeleteItem(editingItem);
+            setDraft(null);
+            setDraftPhotoUri(null);
+            setPendingPhotoTempPath(null);
+            setEditingItem(null);
+            setStep('entry');
+          },
+        },
+      ],
+    );
+  };
+
   const handleBestaetigen = async (
     finalDraft: Draft,
     date: string,
@@ -1078,6 +1135,7 @@ function ExpenseFlow({
         onRescan={handleFoto}
         onConfirm={handleBestaetigen}
         onDiscard={handleVerwerfen}
+        onDelete={handleLoeschen}
       />
     );
   }
@@ -1222,6 +1280,7 @@ function DraftScreen({
   onRescan,
   onConfirm,
   onDiscard,
+  onDelete,
 }: {
   draft: Draft;
   initialDate: string;
@@ -1232,6 +1291,7 @@ function DraftScreen({
   onRescan: () => void;
   onConfirm: (d: Draft, date: string, changedFields: string[]) => void;
   onDiscard: () => void;
+  onDelete: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1477,6 +1537,11 @@ function DraftScreen({
         <View style={styles.buttonWrapper}>
           <Button title="Verwerfen" onPress={onDiscard} color="#999" />
         </View>
+        {isEditing && (
+          <View style={styles.buttonWrapper}>
+            <Button title="Löschen" onPress={onDelete} color={DANGER_COLOR} />
+          </View>
+        )}
       </View>
     </ScrollView>
   );
