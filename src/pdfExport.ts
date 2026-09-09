@@ -7,7 +7,7 @@ import {
   type Color,
 } from 'pdf-lib';
 import RNFS from 'react-native-fs';
-import { Share } from 'react-native';
+import Share from 'react-native-share';
 import { CATEGORY_COLORS, type LineItem } from './budget';
 import type { BudgetSummary } from './budgetEngine';
 
@@ -646,6 +646,18 @@ export async function savePdfAndShare(
   const base64 = uint8ArrayToBase64(bytes);
   const path = `${RNFS.DocumentDirectoryPath}/${fileName}`;
   await RNFS.writeFile(path, base64, 'base64');
-  await Share.share({ url: `file://${path}` });
+  // RNs eingebautes Share reicht auf Android einen rohen file://-Pfad
+  // ungeprüft weiter — moderne Empfänger-Apps (u. a. Google Drive) lehnen das
+  // mit "Bearbeitungszugriff verweigert" ab, weil Android dafür einen
+  // content://-Link über einen FileProvider mit explizit gewährten
+  // Zugriffsrechten verlangt. react-native-share übernimmt diese
+  // FileProvider-Umwandlung automatisch (siehe android/app AndroidManifest.xml
+  // + MainApplication.kt), auf iOS verhält es sich weiterhin wie zuvor.
+  await Share.open({
+    url: `file://${path}`,
+    type: 'application/pdf',
+    filename: fileName,
+    failOnCancel: false,
+  });
   return path;
 }
