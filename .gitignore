@@ -85,5 +85,17 @@ test-quittung*.jpg
 test-beleg*.jpg
 test-receipt*.jpg
 
+# 10 von Google zusammengesuchte Kassenzettel-Bilder fürs Foto-Golden-Set —
+# echte, fremde Belegdaten, aus demselben Grund wie oben nicht im Repo.
+/golden-set-belege/
+
+# photoGoldenSet.ts enthält zwar keine Bilder mehr, aber davon abgeleitete
+# echte Daten (exakte Beträge, Filialstandorte) — ebenfalls fremde
+# Transaktionsdaten, deshalb bewusst nicht im Repo (nur lokal, siehe
+# CLAUDE.md Lessons Learned #39). Nur die Ergebniszahlen (Trefferquote)
+# landen in CLAUDE.md, nicht die Rohdaten.
+src/photoGoldenSet.ts
+src/__tests__/photoGoldenSet.test.ts
+
 # Persönliches Vorführ-/Übungsskript, kein Teil der Projektdokumentation
 demo-skript.md
