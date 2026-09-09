@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deckt genau den Ordner ab, in dem savePdfAndShare() (pdfExport.ts) das PDF
+  ablegt: RNFS.DocumentDirectoryPath entspricht auf Android
+  context.getFilesDir() (bestätigt in RNFSManager.java) — also <files-path>,
+  nicht <external-cache-path> oder <external-path>.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <files-path name="internal_files" path="." />
+</paths>

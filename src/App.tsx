@@ -1956,9 +1956,14 @@ function BudgetScreen({
         summary,
         aiSummaryText,
       });
+      // Erstellungs-Zeitstempel lesbar statt als rohe Date.now()-Millisekunden
+      // (verwirrte beim Testen — "sollte doch dem Tag entsprechen") — Uhrzeit
+      // dranhängen, damit zwei Exporte am selben Tag sich nicht überschreiben.
+      const exportedAt = new Date();
+      const exportedAtLabel = `${todayIso()}-${String(exportedAt.getHours()).padStart(2, '0')}${String(exportedAt.getMinutes()).padStart(2, '0')}`;
       await savePdfAndShare(
         bytes,
-        `budgetpilot-bericht-${selectedMonth}-${Date.now()}.pdf`,
+        `budgetpilot-bericht-${selectedMonth}-erstellt-${exportedAtLabel}.pdf`,
       );
     } catch (e) {
       console.error('[pdf-export] Fehler:', e);

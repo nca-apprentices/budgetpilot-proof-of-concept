@@ -23,5 +23,19 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+
+      <!-- Für react-native-share: PDF-Export teilt an andere Apps (z. B.
+           Google Drive) einen content://-Link statt eines rohen file://-Pfads
+           — ohne FileProvider lehnen moderne Apps solche Links ab
+           ("Bearbeitungszugriff verweigert"), siehe CLAUDE.md Lessons Learned. -->
+      <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.provider"
+        android:grantUriPermissions="true"
+        android:exported="false">
+        <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/file_paths" />
+      </provider>
     </application>
 </manifest>
