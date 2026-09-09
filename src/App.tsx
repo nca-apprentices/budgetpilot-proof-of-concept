@@ -24,6 +24,7 @@ import {
   Animated,
   Image,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -416,6 +417,29 @@ function formatDateDMY(iso: string): string {
   return `${day}.${month}.${year}`;
 }
 
+// "2026-09" + 1 -> "2026-10", "2026-01" - 1 -> "2025-12". Der Tag spielt für
+// Monats-Arithmetik keine Rolle — day 1 verhindert, dass z.B. der 31. Januar
+// beim +1-Monat auf den 3. März überläuft (JS-Date normalisiert überzählige
+// Tage automatisch in den Folgemonat statt zu clampen).
+function shiftMonth(month: string, delta: number): string {
+  const [year, mon] = month.split('-').map(Number);
+  const shifted = new Date(year, mon - 1 + delta, 1);
+  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatMonthLabel(month: string): string {
+  const [year, mon] = month.split('-').map(Number);
+  const date = new Date(year, mon - 1, 1);
+  return date.toLocaleDateString('de-CH', { month: 'long', year: 'numeric' });
+}
+
+// Kurze Monatsnamen ("Jan", "Feb", …) fürs 12er-Raster im Monats-Popup —
+// über toLocaleDateString statt hartcodierter Liste, damit es zur selben
+// de-CH-Lokalisierung wie formatMonthLabel() passt.
+const MONTH_SHORT_NAMES = Array.from({ length: 12 }, (_, i) =>
+  new Date(2000, i, 1).toLocaleDateString('de-CH', { month: 'short' }),
+);
+
 // Robust: akzeptiert "TT.MM.JJJJ", füllt einstellige Tag/Monat-Angaben auf.
 // Gibt null zurück statt zu werfen, wenn der Text nicht als Datum lesbar ist.
 function parseDateDMY(text: string): string | null {
@@ -520,7 +544,6 @@ function App() {
     maxOutputTokens: 2048,
   });
   const [screen, setScreen] = useState<Screen>('expense');
-  const [income, setIncome] = useState<number | null>(null);
   const [items, setItems] = useState<LineItem[]>([]);
   // Datum, das per Antippen im Kalender vorausgewählt wurde — füllt das
   // Kaufdatum im nächsten Entwurf vor, wird danach sofort wieder geleert.
@@ -552,16 +575,12 @@ function App() {
     (async () => {
       try {
         const db = await initDatabase();
-        const [rows, month] = await Promise.all([
-          listLineItems(db),
-          getMonth(db, monthOfDate(todayIso())),
-        ]);
+        const rows = await listLineItems(db);
         if (cancelled) {
           return;
         }
         dbRef.current = db;
         setItems(rows.map(toUiLineItem));
-        setIncome(incomeToChf(month?.incomeCents ?? null));
         setDbStatus('ready');
       } catch (e) {
         console.error('[db] Initialisierung fehlgeschlagen:', e);
@@ -717,18 +736,28 @@ function App() {
     });
   };
 
-  const changeIncome = (next: number | null) => {
-    setIncome(next);
+  // Einkommen ist pro Monat gespeichert (budget_months.income_cents) — anders
+  // als items gibt es dafür keinen sinnvollen "alle Monate auf einmal"-State
+  // auf App-Ebene, deshalb lädt/speichert BudgetScreen es direkt für den
+  // gerade ausgewählten Monat über diese beiden Funktionen.
+  const getIncomeForMonth = async (month: string): Promise<number | null> => {
+    const db = dbRef.current;
+    if (!db) {
+      return null;
+    }
+    const row = await getMonth(db, month);
+    return incomeToChf(row?.incomeCents ?? null);
+  };
+
+  const setIncomeForMonth = (month: string, next: number | null) => {
     const db = dbRef.current;
     if (!db) {
       return;
     }
-    setIncomeCents(db, monthOfDate(todayIso()), incomeToCents(next)).catch(
-      e => {
-        console.error('[db] Einkommen nicht gespeichert:', e);
-        setDbError('Einkommen konnte nicht gespeichert werden.');
-      },
-    );
+    setIncomeCents(db, month, incomeToCents(next)).catch(e => {
+      console.error('[db] Einkommen nicht gespeichert:', e);
+      setDbError('Einkommen konnte nicht gespeichert werden.');
+    });
   };
 
   // Sicherheitsnetz: fängt liegen gebliebene Scan-Zwischenstände ab, falls
@@ -796,8 +825,8 @@ function App() {
           {screen === 'budget' && (
             <BudgetScreen
               model={model}
-              income={income}
-              onChangeIncome={changeIncome}
+              getIncomeForMonth={getIncomeForMonth}
+              setIncomeForMonth={setIncomeForMonth}
               items={items}
               onEditItem={item => {
                 setItemToEdit(item);
@@ -1811,36 +1840,97 @@ function DraftScreen({
 
 function BudgetScreen({
   model,
-  income,
-  onChangeIncome,
+  getIncomeForMonth,
+  setIncomeForMonth,
   items,
   onEditItem,
 }: {
   model: UseModelResult;
-  income: number | null;
-  onChangeIncome: (income: number | null) => void;
+  getIncomeForMonth: (month: string) => Promise<number | null>;
+  setIncomeForMonth: (month: string, income: number | null) => void;
   items: LineItem[];
   onEditItem: (item: LineItem) => void;
 }) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
   const styles = useMemo(() => getStyles(colors), [colors]);
-  const [incomeText, setIncomeText] = useState(
-    income === null ? '' : String(income),
+
+  // Vorher zeigte dieser Screen ALLE Posten aus ALLEN Monaten gleichzeitig
+  // (Bug-Report: eine im Juli erfasste Miete zählte auch im September mit) —
+  // jetzt gilt immer genau ein ausgewählter Monat, per Pfeilen navigierbar.
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    monthOfDate(todayIso()),
   );
+  const [income, setIncome] = useState<number | null>(null);
+  const [incomeText, setIncomeText] = useState('');
+  const [isLoadingIncome, setIsLoadingIncome] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
+  // Popup zum direkten Springen zu einem Monat/Jahr (statt nur einzeln über
+  // die Pfeile zu blättern) — eigenes Jahr im Picker, damit man im Popup erst
+  // durch Jahre blättern kann, ohne dass sich der sichtbare Monat im
+  // Hintergrund schon mitverändert; erst ein Antippen einer Monatskachel
+  // übernimmt die Auswahl wirklich.
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() =>
+    Number(selectedMonth.slice(0, 4)),
+  );
+  const selectedYear = Number(selectedMonth.slice(0, 4));
+  const selectedMonthIndex = Number(selectedMonth.slice(5, 7)) - 1;
+
+  const openMonthPicker = () => {
+    setPickerYear(selectedYear);
+    setIsMonthPickerOpen(true);
+  };
+
+  // Einkommen ist pro Monat in der DB gespeichert — bei jedem Monatswechsel
+  // neu laden, statt es wie die Posten komplett im Speicher zu halten (es
+  // gibt potenziell beliebig viele Monate, aber nur einer ist je sichtbar).
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingIncome(true);
+    getIncomeForMonth(selectedMonth)
+      .then(value => {
+        if (cancelled) {
+          return;
+        }
+        setIncome(value);
+        setIncomeText(value === null ? '' : String(value));
+        setIsLoadingIncome(false);
+      })
+      .catch(e => {
+        console.error('[db] Einkommen für Monat nicht geladen:', e);
+        if (!cancelled) {
+          setIsLoadingIncome(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMonth, getIncomeForMonth]);
+
   const handleIncomeChange = (t: string) => {
     setIncomeText(t);
-    onChangeIncome(parseAmount(t));
+    const parsed = parseAmount(t);
+    setIncome(parsed);
+    setIncomeForMonth(selectedMonth, parsed);
   };
 
   // Fixkosten vs. geplante Käufe sind keine getrennt geführten Listen,
-  // sondern nur eine Sicht auf `items`, abgeleitet aus `cadence`.
-  const fixedCosts = items.filter(item => item.cadence === 'monthly');
-  const plannedPurchases = items.filter(item => item.cadence === 'one_time');
-  const summary = computeBudget(income, items);
+  // sondern nur eine Sicht auf die Posten DIESES Monats, abgeleitet aus
+  // `cadence`. `date` statt `monthId` ist hier bewusst die Filterquelle —
+  // `items` kommt als UI-Modell (budget.ts) ohne monthId, aber date und
+  // monthId folgen ohnehin immer demselben Monat (siehe insertLineItem).
+  const monthItems = useMemo(
+    () => items.filter(item => monthOfDate(item.date) === selectedMonth),
+    [items, selectedMonth],
+  );
+  const fixedCosts = monthItems.filter(item => item.cadence === 'monthly');
+  const plannedPurchases = monthItems.filter(
+    item => item.cadence === 'one_time',
+  );
+  const summary = computeBudget(income, monthItems);
 
   const handleExportPdf = async () => {
     setExportError(null);
@@ -1852,7 +1942,7 @@ function BudgetScreen({
       try {
         model.reset();
         const raw = await model.generate(
-          buildSummaryPrompt(income, items, summary),
+          buildSummaryPrompt(income, monthItems, summary),
         );
         aiSummaryText = raw.trim() || null;
       } catch (e) {
@@ -1862,11 +1952,14 @@ function BudgetScreen({
     try {
       const bytes = await buildBudgetReportPdf({
         income,
-        items,
+        items: monthItems,
         summary,
         aiSummaryText,
       });
-      await savePdfAndShare(bytes, `budgetpilot-bericht-${Date.now()}.pdf`);
+      await savePdfAndShare(
+        bytes,
+        `budgetpilot-bericht-${selectedMonth}-${Date.now()}.pdf`,
+      );
     } catch (e) {
       console.error('[pdf-export] Fehler:', e);
       setExportError('PDF-Export fehlgeschlagen. Bitte erneut versuchen.');
@@ -1886,7 +1979,88 @@ function BudgetScreen({
     >
       <Text style={styles.title}>Budget</Text>
 
-      <Text style={styles.label}>Monatliches Einkommen</Text>
+      <View style={styles.monthSelectorRow}>
+        <Pressable
+          style={styles.monthArrowButton}
+          onPress={() => setSelectedMonth(prev => shiftMonth(prev, -1))}
+        >
+          <Text style={styles.monthArrowText}>‹</Text>
+        </Pressable>
+        <Pressable onPress={openMonthPicker} style={styles.monthLabelButton}>
+          <Text style={styles.monthLabel}>{formatMonthLabel(selectedMonth)}</Text>
+        </Pressable>
+        <Pressable
+          style={styles.monthArrowButton}
+          onPress={() => setSelectedMonth(prev => shiftMonth(prev, 1))}
+        >
+          <Text style={styles.monthArrowText}>›</Text>
+        </Pressable>
+      </View>
+
+      <Modal
+        visible={isMonthPickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsMonthPickerOpen(false)}
+      >
+        <Pressable
+          style={styles.monthPickerBackdrop}
+          onPress={() => setIsMonthPickerOpen(false)}
+        >
+          {/* onPress hier fängt Taps auf der Karte ab, damit sie nicht bis
+              zum Backdrop durchreichen und das Popup versehentlich schliessen. */}
+          <Pressable style={styles.monthPickerCard} onPress={() => {}}>
+            <View style={styles.monthSelectorRow}>
+              <Pressable
+                style={styles.monthArrowButton}
+                onPress={() => setPickerYear(y => y - 1)}
+              >
+                <Text style={styles.monthArrowText}>‹</Text>
+              </Pressable>
+              <Text style={styles.monthLabel}>{pickerYear}</Text>
+              <Pressable
+                style={styles.monthArrowButton}
+                onPress={() => setPickerYear(y => y + 1)}
+              >
+                <Text style={styles.monthArrowText}>›</Text>
+              </Pressable>
+            </View>
+            <View style={styles.monthGrid}>
+              {MONTH_SHORT_NAMES.map((name, index) => {
+                const monthStr = `${pickerYear}-${String(index + 1).padStart(2, '0')}`;
+                const isActive =
+                  pickerYear === selectedYear && index === selectedMonthIndex;
+                return (
+                  <Pressable
+                    key={monthStr}
+                    style={[
+                      styles.monthGridCell,
+                      isActive && styles.monthGridCellActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedMonth(monthStr);
+                      setIsMonthPickerOpen(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.monthGridCellText,
+                        isActive && styles.monthGridCellTextActive,
+                      ]}
+                    >
+                      {name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Text style={styles.label}>
+        Monatliches Einkommen{isLoadingIncome ? ' (lädt…)' : ''}
+      </Text>
       <TextInput
         style={styles.input}
         value={incomeText}
@@ -2928,6 +3102,77 @@ function getStyles(colors: ReturnType<typeof useThemeColors>) {
       marginTop: 18,
       marginBottom: 2,
       color: colors.textMuted,
+    },
+    monthSelectorRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 4,
+    },
+    monthArrowButton: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+    },
+    monthArrowText: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: colors.accent,
+    },
+    monthLabel: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: 17,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    monthLabelButton: {
+      flex: 1,
+    },
+    monthPickerBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 24,
+    },
+    monthPickerCard: {
+      width: '100%',
+      maxWidth: 360,
+      backgroundColor: colors.surfaceRaised,
+      borderRadius: 20,
+      padding: 20,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.3,
+      shadowRadius: 16,
+      shadowOffset: { width: 0, height: 8 },
+      elevation: 8,
+    },
+    monthGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      marginTop: 16,
+    },
+    monthGridCell: {
+      width: '30%',
+      paddingVertical: 14,
+      borderRadius: 12,
+      alignItems: 'center',
+      marginBottom: 10,
+      backgroundColor: colors.surface,
+    },
+    monthGridCellActive: {
+      backgroundColor: colors.accent,
+    },
+    monthGridCellText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    monthGridCellTextActive: {
+      color: '#ffffff',
     },
     manualEditBadge: {
       fontSize: 11,
