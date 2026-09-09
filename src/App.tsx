@@ -2434,6 +2434,11 @@ function PriceSearchScreen({ model }: { model: UseModelResult }) {
     >
       <Text style={styles.title}>Preise vergleichen</Text>
       <Text style={styles.status}>{status}</Text>
+      <Text style={styles.status}>
+        Benötigt eine Internetverbindung, um Preise von toppreise.ch
+        abzurufen — ohne Verbindung stehen nur zuvor gespeicherte
+        (zwischengespeicherte) Ergebnisse zur Verfügung.
+      </Text>
 
       <Text style={styles.label}>Produkt beschreiben:</Text>
       <TextInput
