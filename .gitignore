@@ -84,3 +84,6 @@ yarn-error.log
 test-quittung*.jpg
 test-beleg*.jpg
 test-receipt*.jpg
+
+# Persönliches Vorführ-/Übungsskript, kein Teil der Projektdokumentation
+demo-skript.md
