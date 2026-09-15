@@ -18,7 +18,15 @@
  * @format
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Alert,
   Animated,
@@ -467,17 +475,48 @@ function findDateInText(text: string): string | null {
 
 type Screen = 'expense' | 'budget' | 'calendar' | 'price' | 'llmTest' | 'settings';
 
-// Testweiser Dark-Mode-Umschalter (Settings-Tab) — überschreibt das
-// System-Theme, ohne useColorScheme() selbst zu verändern (nicht möglich).
-// Der State lebt in App() (Quelle der Wahrheit, siehe dort), Nachfahren
-// lesen ihn per Context statt per Prop-Drilling durch jede Screen-Komponente
-// — useThemeColors() wird bereits unabhängig von jeder Komponente aufgerufen.
-// Bewusst nicht persistiert: reiner Test-/Debug-Schalter für diesen PoC, kein
-// echtes Nutzer-Setting.
+// Dark-Mode-Umschalter (Settings-Tab) — überschreibt das System-Theme, ohne
+// useColorScheme() selbst zu verändern (nicht möglich). Der State lebt in
+// App() (Quelle der Wahrheit, siehe dort), Nachfahren lesen ihn per Context
+// statt per Prop-Drilling durch jede Screen-Komponente — useThemeColors()
+// wird bereits unabhängig von jeder Komponente aufgerufen.
 const DarkModeOverrideContext = createContext<{
   isDarkMode: boolean;
   setIsDarkMode: (value: boolean) => void;
 } | null>(null);
+
+// Persistiert die getroffene Wahl über einen App-Neustart hinweg (vorher
+// fiel der Schalter nach jedem Neustart auf das System-Theme zurück —
+// Nutzer-Feedback). Bewusst als eigene Textdatei statt in der SQLite-DB:
+// eine einzelne globale Einstellung passt nicht ins monatsbezogene
+// Budget-Schema, und dasselbe RNFS-Datei-Muster wird schon für den
+// toppreise.ch-Cache verwendet (siehe toppreise.ts). Kein Wert auf der
+// Platte heisst "noch nie manuell gesetzt", dann bleibt das System-Theme
+// der Standard (siehe App()).
+const DARK_MODE_PREFERENCE_FILE = 'dark-mode-preference.txt';
+
+async function readPersistedDarkMode(): Promise<boolean | null> {
+  try {
+    const path = `${RNFS.DocumentDirectoryPath}/${DARK_MODE_PREFERENCE_FILE}`;
+    if (!(await RNFS.exists(path))) {
+      return null;
+    }
+    return (await RNFS.readFile(path, 'utf8')).trim() === 'true';
+  } catch (e) {
+    console.warn('[settings] Dark-Mode-Einstellung nicht lesbar:', e);
+    return null;
+  }
+}
+
+function writePersistedDarkMode(value: boolean): void {
+  RNFS.writeFile(
+    `${RNFS.DocumentDirectoryPath}/${DARK_MODE_PREFERENCE_FILE}`,
+    String(value),
+    'utf8',
+  ).catch(e => {
+    console.warn('[settings] Dark-Mode-Einstellung nicht speicherbar:', e);
+  });
+}
 
 // Ein offenes "Rückgängig"-Banner — siehe App()s triggerUndo(). `key` sorgt
 // für einen sauberen Remount von UndoSnackbar (frischer Timer/Animation) bei
@@ -501,6 +540,26 @@ function App() {
   const [darkModeOverride, setDarkModeOverride] = useState(
     () => systemColorScheme === 'dark',
   );
+  // Persistierte Wahl beim Start nachladen — der obige useState-Initializer
+  // kann nicht direkt darauf zugreifen (RNFS ist async, useState-Initializer
+  // müssen synchron sein), deshalb übernimmt dieser Effekt sie nachträglich,
+  // sobald sie geladen ist. Kein Wert auf der Platte (erster App-Start)
+  // lässt den System-Theme-Default aus der Zeile oben unangetastet.
+  useEffect(() => {
+    let cancelled = false;
+    readPersistedDarkMode().then(persisted => {
+      if (!cancelled && persisted !== null) {
+        setDarkModeOverride(persisted);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const setDarkModeOverrideAndPersist = useCallback((value: boolean) => {
+    setDarkModeOverride(value);
+    writePersistedDarkMode(value);
+  }, []);
   const colors = useMemo(
     () => computeThemeColors(darkModeOverride),
     [darkModeOverride],
@@ -769,8 +828,8 @@ function App() {
   }, []);
 
   const darkModeOverrideValue = useMemo(
-    () => ({ isDarkMode: darkModeOverride, setIsDarkMode: setDarkModeOverride }),
-    [darkModeOverride],
+    () => ({ isDarkMode: darkModeOverride, setIsDarkMode: setDarkModeOverrideAndPersist }),
+    [darkModeOverride, setDarkModeOverrideAndPersist],
   );
 
   if (dbStatus !== 'ready') {
