@@ -7,39 +7,95 @@
 
 - ✅ Projekt-Setup: React Native 0.87 (TypeScript), erstellt in IntelliJ
 - ✅ GitHub-Repo verbunden: `github.com/nca-apprentices/budgetpilot-proof-of-concept` (privat)
-- ✅ **Grösstes technisches Risiko widerlegt:** Gemma 3 1B-IT läuft nachweislich on-device im iOS-Simulator (`react-native-litert-lm`), liefert korrekte, verständliche Antworten, funktioniert offline
+- ✅ **Grösstes technisches Risiko widerlegt:** Gemma 3 1B-IT läuft nachweislich on-device im iOS-Simulator
+  (`react-native-litert-lm`), liefert korrekte, verständliche Antworten, funktioniert offline
 - ✅ Bekannter Bug gefunden & gelöst (siehe "Lessons Learned" unten)
-- ✅ "Ausgabe erfassen" + "Budget" + "Kalender" + "LLM-Test" Screens implementiert (App.tsx): Freitext ODER Beleg-Foto → Gemma-4-E2B-it-Extraktion → Entwurf zum Bestätigen, bewusst ohne Persistenz
-- ✅ Baseline Budget Engine implementiert (`budget.ts` Datenmodell, `budgetEngine.ts` reine `computeBudget`-Funktion, Budget-Tab in App.tsx mit Einkommen-Eingabe, Fixkosten-/geplante-Käufe-Liste, Restbudget + Warnungen)
-- ✅ PDF-Export implementiert und im Simulator verifiziert: "Freundlich"-Layout (`pdfExport.ts`, reines `pdf-lib`, kein natives PDF-Modul) mit farbigen Kategorie-Chips + Datums-Pillen pro Posten, abgerundeten Posten-Karten, Zwischen-/Gesamtsumme, Restbudget-Fortschrittsbalken, Warnungs-Banner und einer KI-Zusammenfassungs-Box ("KI · BITTE PRÜFEN"), Speichern via `react-native-fs` + Teilen über den eingebauten `Share`-Dialog. Custom-Font-Embedding (Fraunces/Karla) ist am Hermes-Runtime gescheitert, läuft daher mit Standard-Fonts (Times-Italic für die grossen Zahlen, Helvetica/HelveticaBold sonst) — siehe Lessons Learned. `LineItem` um ein manuell editierbares Kaufdatum ergänzt (Textfeld "TT.MM.JJJJ" im Entwurf-Screen, kein nativer Datums-Picker).
-- ✅ **Wichtiger Bugfix, wirkt sich auf die ganze App aus:** `model.reset()` wird jetzt vor jedem unabhängigen `generate()`-Aufruf aufgerufen (LLM-Test, Freitext-Extraktion, PDF-Zusammenfassung) — vorher hing jeder Aufruf an derselben, endlos wachsenden Modell-Konversation, was zu Kontext-Verschmutzung zwischen völlig unabhängigen Anfragen führte (siehe Lessons Learned)
-- ✅ Kalender-Tab implementiert und im Simulator verifiziert (`react-native-calendars`, reines JS, kein natives Modul): Monatsansicht mit Punkt-Markierung an Tagen mit bereits erfassten Posten. Antippen eines Tages wechselt zu "Ausgabe erfassen" und füllt das Kaufdatum im Entwurf-Screen mit dem angetippten Datum vor (statt heutigem Datum) — nutzt das Kaufdatum-Feld aus dem PDF-Export-Feature weiter.
-- ✅ Projekt-Quelldateien nach `src/` umstrukturiert (App.tsx, budget.ts, budgetEngine.ts, pdfExport.ts, `__tests__/`); Config-Dateien bleiben im Root
-- ✅ Umstieg auf Gemma 4 E2B-it (multimodal, ersetzt Gemma 3 1B-IT komplett) vollständig umgesetzt UND im Simulator verifiziert: Download (~2.6 GB, automatisch über `ModelRegistry`), Kamera-/Galerie-Erfassung (`react-native-image-picker`, Auswahl "Jetzt aufnehmen"/"Hochladen")
-- ✅ Foto-Extraktion auf OCR-first umgestellt (`ios/budgetpilot/ReceiptOCR.swift`, natives Modul um Apples Vision-Framework/`VNRecognizeTextRequest`): statt den Beleg als Bild direkt an Gemma 4 E2B-it zu geben, liest Vision zuerst den Rohtext aus, der dann über denselben bewährten Freitext-Extraktionspfad läuft. **Zuverlässig, nach Zeilen-Rekonstruktion über Bounding-Boxes (Lessons Learned #19):** alle drei echten Testbelege (unterschiedliche Layouts, u. a. mehrspaltige Tabelle und Fremdwährungs-/Rabatt-Zeilen) liefern jetzt 100% Confidence und den korrekten Betrag. Zusätzlich eine deterministische Regex (`findTotalAmountInOcrText`) als zweite Absicherung, die den Betrag bei "TOTAL &lt;Währung&gt;" direkt aus dem OCR-Text zieht statt das Modell raten zu lassen. Thinking Mode (`thinking: { enabled: true, tokenBudget: 512 }`, `maxOutputTokens: 2048`) bleibt aktiv, ohne belastbar nachgewiesenen Nutzen (#15) — aber mit korrigiertem Token-Budget nach einem dadurch verursachten Fehler (#18). Nur iOS — Android-Äquivalent (z. B. ML Kit) noch offen.
-- ✅ Lokale SQLite-Datenbank implementiert (`src/db/`, `@op-engineering/op-sqlite`): bestätigte Posten und das Monatseinkommen überleben einen App-Neustart. Schema mit `budget_months`/`line_items`/`price_results`, Migrationen über `PRAGMA user_version`, Beträge als **Integer-Rappen** statt REAL. Das Repository spricht einen schmalen SQL-Port (`src/db/sql.ts`) statt op-sqlite direkt — dadurch laufen die DB-Tests gegen echtes SQLite ohne Simulator (`__tests__/db.test.ts`, via Nodes eingebautem `node:sqlite`, siehe Lessons Learned #25). **Inzwischen ausführlich im iOS-Simulator verifiziert** (nicht mehr nur Unit-Tests): Bearbeiten/Löschen bestehender Posten, dauerhafte Beleg-Fotos und die Migrationen 2+3 wurden live getestet, siehe Lessons Learned #32–#35.
-- ✅ Preislogik toppreise.ch implementiert (`src/toppreise.ts` + "Preise"-Tab in App.tsx): Freitext → Gemma formuliert daraus einen Suchbegriff → HTML-Abruf per `fetch` und deterministisches Parsen, günstigstes Angebot des passendsten Produkts, JSON-Datei-Cache (`react-native-fs`) für Offline-Betrieb. Die Preise kommen ausschliesslich aus dem geparsten HTML, nie vom Modell — die KI formuliert nur den Suchbegriff. **Live im iOS-Simulator verifiziert:** Freitext "Sony Kopfhörer xm5" → vom Modell normalisiert zu "Sony XM5" → echter Live-Abruf von toppreise.ch liefert CHF 153.00 (SONY WH-1000 XM5 SA, Black, günstigstes von 13 Angeboten, inkl. Versand CHF 162.50) plus weitere Treffer — kompletter End-to-End-Durchlauf (Modell-Normalisierung + echter HTML-Abruf + Parsing) funktioniert. Ausserdem im UI ein dauerhafter Hinweis ergänzt ("Benötigt eine Internetverbindung, um Preise von toppreise.ch abzurufen…"), passend zur in den Risiken vorgesehenen Mitigation "klare UI 'Preisabruf benötigt Internet'".
-- ⏳ Offen: iPhone 12 auf echter Hardware testen (iOS Extended-Virtual-Addressing-Entitlement braucht kostenpflichtigen Apple-Developer-Account, noch nicht eingerichtet). Golden Set Freitext (n=30), Foto-Golden-Set (n=10, siehe Lessons Learned #39), toppreise.ch-Live-Test, der Offline-Flugmodus-Nachweis und inzwischen auch der `launchCamera()`-Pfad ("Jetzt aufnehmen", siehe Lessons Learned #41) sind dagegen fertig, siehe oben. POC-Report (als Artifact gebaut, bewusst noch nicht veröffentlicht) und Demo-Skript (`demo-skript.md`, bewusst nicht im Repo/gitignored — persönliches Vorführ-Skript, kein Projekt-Doku-Artefakt) sind ebenfalls fertig.
-- ✅ **Android läuft vollständig auf echtem Gerät** (Samsung Galaxy S21 FE, `SM-G990B`, Android 16/API 36): `minSdkVersion`-Fix (24→26), Metro-Verbindungsproblem gelöst, `libc++_shared.so`-Packaging-Bug behoben (Lessons Learned #20), und der auf dem Emulator beobachtete `SIGILL`-Absturz (Lessons Learned #21) trat auf echter Hardware **nicht** auf — bestätigt, dass er Emulator-/Virtualisierungs-spezifisch war. Mit `forceLoad: true` (RAM-Vorab-Check war auf dem Gerät trotz 7.5 GB RAM knapp zu konservativ, ~430–450 MB "fehlend" laut Schätzung) lädt Gemma 4 E2B-it vollständig, und die Freitext-Extraktion liefert ein korrektes Ergebnis (`{"description":"Miete","amount":1200,...,"confidence":0.95}`) — End-to-End einmal komplett verifiziert. Siehe Lessons Learned #22. Foto-Pfad auf Android inzwischen ebenfalls verifiziert: eigenes ML-Kit-Text-Recognition-Modul als Android-Äquivalent zu Vision-OCR (Punkt 14) plus ein Foto-Vorschau-Bugfix (Punkt 24) — beides auf dem echten Galaxy S21 FE bestätigt.
+- ✅ "Ausgabe erfassen" + "Budget" + "Kalender" + "LLM-Test" Screens implementiert (App.tsx): Freitext ODER Beleg-Foto →
+  Gemma-4-E2B-it-Extraktion → Entwurf zum Bestätigen, bewusst ohne Persistenz
+- ✅ Baseline Budget Engine implementiert (`budget.ts` Datenmodell, `budgetEngine.ts` reine `computeBudget`-Funktion,
+  Budget-Tab in App.tsx mit Einkommen-Eingabe, Fixkosten-/geplante-Käufe-Liste, Restbudget + Warnungen)
+- ✅ PDF-Export implementiert und im Simulator verifiziert: "Freundlich"-Layout (`pdfExport.ts`, reines `pdf-lib`, kein
+  natives PDF-Modul) mit farbigen Kategorie-Chips + Datums-Pillen pro Posten, abgerundeten Posten-Karten,
+  Zwischen-/Gesamtsumme, Restbudget-Fortschrittsbalken, Warnungs-Banner und einer KI-Zusammenfassungs-Box ("KI · BITTE
+  PRÜFEN"), Speichern via `react-native-fs` + Teilen über den eingebauten `Share`-Dialog. Custom-Font-Embedding
+  (Fraunces/Karla) ist am Hermes-Runtime gescheitert, läuft daher mit Standard-Fonts (Times-Italic für die grossen
+  Zahlen, Helvetica/HelveticaBold sonst) — siehe Lessons Learned. `LineItem` um ein manuell editierbares Kaufdatum
+  ergänzt (Textfeld "TT.MM.JJJJ" im Entwurf-Screen, kein nativer Datums-Picker).
+- ✅ **Wichtiger Bugfix, wirkt sich auf die ganze App aus:** `model.reset()` wird jetzt vor jedem unabhängigen
+  `generate()`-Aufruf aufgerufen (LLM-Test, Freitext-Extraktion, PDF-Zusammenfassung) — vorher hing jeder Aufruf an
+  derselben, endlos wachsenden Modell-Konversation, was zu Kontext-Verschmutzung zwischen völlig unabhängigen Anfragen
+  führte (siehe Lessons Learned)
+- ✅ Kalender-Tab implementiert und im Simulator verifiziert (`react-native-calendars`, reines JS, kein natives Modul):
+  Monatsansicht mit Punkt-Markierung an Tagen mit bereits erfassten Posten. Antippen eines Tages wechselt zu "Ausgabe
+  erfassen" und füllt das Kaufdatum im Entwurf-Screen mit dem angetippten Datum vor (statt heutigem Datum) — nutzt das
+  Kaufdatum-Feld aus dem PDF-Export-Feature weiter.
+- ✅ Projekt-Quelldateien nach `src/` umstrukturiert (App.tsx, budget.ts, budgetEngine.ts, pdfExport.ts, `__tests__/`);
+  Config-Dateien bleiben im Root
+- ✅ Umstieg auf Gemma 4 E2B-it (multimodal, ersetzt Gemma 3 1B-IT komplett) vollständig umgesetzt UND im Simulator
+  verifiziert: Download (~2.6 GB, automatisch über `ModelRegistry`), Kamera-/Galerie-Erfassung
+  (`react-native-image-picker`, Auswahl "Jetzt aufnehmen"/"Hochladen")
+- ✅ Foto-Extraktion auf OCR-first umgestellt (`ios/budgetpilot/ReceiptOCR.swift`, natives Modul um Apples
+  Vision-Framework/`VNRecognizeTextRequest`): statt den Beleg als Bild direkt an Gemma 4 E2B-it zu geben, liest Vision
+  zuerst den Rohtext aus, der dann über denselben bewährten Freitext-Extraktionspfad läuft. **Zuverlässig, nach
+  Zeilen-Rekonstruktion über Bounding-Boxes (Lessons Learned #19):** alle drei echten Testbelege (unterschiedliche
+  Layouts, u. a. mehrspaltige Tabelle und Fremdwährungs-/Rabatt-Zeilen) liefern jetzt 100% Confidence und den korrekten
+  Betrag. Zusätzlich eine deterministische Regex (`findTotalAmountInOcrText`) als zweite Absicherung, die den Betrag bei
+  "TOTAL &lt;Währung&gt;" direkt aus dem OCR-Text zieht statt das Modell raten zu lassen. Thinking Mode
+  (`thinking: { enabled: true, tokenBudget: 512 }`, `maxOutputTokens: 2048`) bleibt aktiv, ohne belastbar nachgewiesenen
+  Nutzen (#15) — aber mit korrigiertem Token-Budget nach einem dadurch verursachten Fehler (#18). Nur iOS —
+  Android-Äquivalent (z. B. ML Kit) noch offen.
+- ✅ Lokale SQLite-Datenbank implementiert (`src/db/`, `@op-engineering/op-sqlite`): bestätigte Posten und das
+  Monatseinkommen überleben einen App-Neustart. Schema mit `budget_months`/`line_items`/`price_results`, Migrationen
+  über `PRAGMA user_version`, Beträge als **Integer-Rappen** statt REAL. Das Repository spricht einen schmalen SQL-Port
+  (`src/db/sql.ts`) statt op-sqlite direkt — dadurch laufen die DB-Tests gegen echtes SQLite ohne Simulator
+  (`__tests__/db.test.ts`, via Nodes eingebautem `node:sqlite`, siehe Lessons Learned #25). **Inzwischen ausführlich im
+  iOS-Simulator verifiziert** (nicht mehr nur Unit-Tests): Bearbeiten/Löschen bestehender Posten, dauerhafte Beleg-Fotos
+  und die Migrationen 2+3 wurden live getestet, siehe Lessons Learned #32–#35.
+- ✅ Preislogik toppreise.ch implementiert (`src/toppreise.ts` + "Preise"-Tab in App.tsx): Freitext → Gemma formuliert
+  daraus einen Suchbegriff → HTML-Abruf per `fetch` und deterministisches Parsen, günstigstes Angebot des passendsten
+  Produkts, JSON-Datei-Cache (`react-native-fs`) für Offline-Betrieb. Die Preise kommen ausschliesslich aus dem
+  geparsten HTML, nie vom Modell — die KI formuliert nur den Suchbegriff. **Live im iOS-Simulator verifiziert:**
+  Freitext "Sony Kopfhörer xm5" → vom Modell normalisiert zu "Sony XM5" → echter Live-Abruf von toppreise.ch liefert CHF
+  153.00 (SONY WH-1000 XM5 SA, Black, günstigstes von 13 Angeboten, inkl. Versand CHF 162.50) plus weitere Treffer —
+  kompletter End-to-End-Durchlauf (Modell-Normalisierung + echter HTML-Abruf + Parsing) funktioniert. Ausserdem im UI
+  ein dauerhafter Hinweis ergänzt ("Benötigt eine Internetverbindung, um Preise von toppreise.ch abzurufen…"), passend
+  zur in den Risiken vorgesehenen Mitigation "klare UI 'Preisabruf benötigt Internet'".
+- ⏳ Offen: iPhone 12 auf echter Hardware testen (iOS Extended-Virtual-Addressing-Entitlement braucht kostenpflichtigen
+  Apple-Developer-Account, noch nicht eingerichtet). Golden Set Freitext (n=30), Foto-Golden-Set (n=10, siehe Lessons
+  Learned #39), toppreise.ch-Live-Test, der Offline-Flugmodus-Nachweis und inzwischen auch der `launchCamera()`-Pfad (
+  "Jetzt aufnehmen", siehe Lessons Learned #41) sind dagegen fertig, siehe oben. POC-Report (als Artifact gebaut,
+  bewusst noch nicht veröffentlicht) und Demo-Skript (`demo-skript.md`, bewusst nicht im Repo/gitignored — persönliches
+  Vorführ-Skript, kein Projekt-Doku-Artefakt) sind ebenfalls fertig.
+- ✅ **Android läuft vollständig auf echtem Gerät** (Samsung Galaxy S21 FE, `SM-G990B`, Android 16/API 36):
+  `minSdkVersion`-Fix (24→26), Metro-Verbindungsproblem gelöst, `libc++_shared.so`-Packaging-Bug behoben (Lessons
+  Learned #20), und der auf dem Emulator beobachtete `SIGILL`-Absturz (Lessons Learned #21) trat auf echter Hardware
+  **nicht** auf — bestätigt, dass er Emulator-/Virtualisierungs-spezifisch war. Mit `forceLoad: true` (RAM-Vorab-Check
+  war auf dem Gerät trotz 7.5 GB RAM knapp zu konservativ, ~430–450 MB "fehlend" laut Schätzung) lädt Gemma 4 E2B-it
+  vollständig, und die Freitext-Extraktion liefert ein korrektes Ergebnis
+  (`{"description":"Miete","amount":1200,...,"confidence":0.95}`) — End-to-End einmal komplett verifiziert. Siehe
+  Lessons Learned #22. Foto-Pfad auf Android inzwischen ebenfalls verifiziert: eigenes ML-Kit-Text-Recognition-Modul als
+  Android-Äquivalent zu Vision-OCR (Punkt 14) plus ein Foto-Vorschau-Bugfix (Punkt 24) — beides auf dem echten Galaxy
+  S21 FE bestätigt.
 
 ## Feststehende Tech-Entscheidungen
 
-Diese Punkte waren im ursprünglichen Plan noch offen ("je nach Team-Know-how" etc.) — sind aber jetzt entschieden und sollten nicht mehr zur Diskussion stehen:
+Diese Punkte waren im ursprünglichen Plan noch offen ("je nach Team-Know-how" etc.) — sind aber jetzt entschieden und
+sollten nicht mehr zur Diskussion stehen:
 
-| Punkt | Entscheidung |
-|---|---|
-| Programmiersprache / Framework | React Native + TypeScript (nicht Flutter) |
-| On-Device-LLM | Gemma 4 E2B-it (multimodal: Text + Vision + Audio) — **ersetzt Gemma 3 1B-IT vollständig** (ein Modell für alle Tabs, statt zwei parallel geladene Modelle; Begründung: einfachere Architektur, in Kauf genommener Trade-off ist der größere Download/RAM-Bedarf auch für die reinen Text-Flows) |
-| Modell-Quelle | `litert-community/gemma-4-E2B-it-litert-lm` auf Hugging Face, Datei **`gemma-4-E2B-it.litertlm`** — **verifiziert per HuggingFace-API** (nicht geraten): exakt 2'588'147'712 Bytes (≈ 2.59 GB), Repo-Metadaten bestätigen `gated: false` (kein Login/Lizenz-Klick nötig, anders als beim alten Gemma-3-1B-IT-Repo). `react-native-litert-lm` exportiert die passende URL fertig als Konstante `GEMMA_4_E2B_IT`. Das Repo enthält zusätzlich Hardware-spezifische Varianten (Tensor G5, Intel LNL/PTL, Qualcomm) und eine Web/WASM-Variante (`-web.litertlm`/`.task`) — keine davon relevant für iPhone 12/Galaxy S21 FE, die generische `gemma-4-E2B-it.litertlm` ist richtig. |
-| LLM-Runtime/Bibliothek | `react-native-litert-lm@0.6.1` (LiteRT-LM-Engine 0.15.0) + `react-native-nitro-modules` (nicht llama.cpp/MediaPipe direkt). Explizit geprüft: Version unterstützt Gemma 4 nativ (Paketbeschreibung: "Optimized for Gemma 4"), kein Update nötig. |
-| Kamera-/Beleg-Erfassung | `react-native-image-picker` (`launchCamera()`/`launchImageLibrary()`) — bewusst statt `react-native-vision-camera`, da nur ein Einzelfoto benötigt wird, kein Live-Preview/Frame-Processing. Installiert und via `pod install` gelinkt, im Simulator verifiziert. |
-| Beleg-Texterkennung (OCR) | Eigenes natives Modul `ReceiptOCR` (`ios/budgetpilot/ReceiptOCR.swift` + `.m`-Bridge ohne Bridging-Header, per `xcodeproj`-Gem ins Xcode-Projekt eingebunden) um Apples `Vision`/`VNRecognizeTextRequest` — ersetzt die direkte Bild-Übergabe an Gemma 4 E2B-it (`sendMultimodalMessage`) für den Foto-Pfad. Begründung: kleine Multimodal-Modelle sind bei feinem Beleg-Druck unzuverlässig, dediziertes On-Device-OCR liest zuverlässiger, danach läuft derselbe Text-Extraktionspfad wie bei Freitext. Nur iOS umgesetzt, Android (z. B. ML Kit Text Recognition) noch offen. |
-| Zielplattformen | Beide von Anfang an — iPhone 12 (iOS 15.1+) und Samsung Galaxy S21 FE |
-| Wichtige Einschränkung | iOS-Simulator-Test nur auf Apple-Silicon-Mac (arm64) möglich — bei uns gegeben |
-| Backend für Inferenz | `cpu` (GPU/Metal im Simulator unzuverlässig, ggf. später auf echtem Gerät testen) |
-| Datenhaltung | Lokal, SQLite via **`@op-engineering/op-sqlite`** (JSI, kein Bridge-Overhead — relevant, weil Gemma-Inferenz und DB-Zugriffe sich dieselbe CPU teilen; autolinkt in bare RN, keine Expo-Abhängigkeit). Nicht `expo-sqlite` (zöge `expo`/expo-modules-core in ein Projekt ohne Expo) und nicht `react-native-sqlite-storage` (Callback-API, träge bei New Arch). Beträge als Integer-Rappen, Migrationen über `PRAGMA user_version`. |
-| PDF-Erstellung | `pdf-lib` (reines JS, kein natives Modul/pod install nötig, manuelles Text-/Formen-Layout via `drawText`/`drawSvgPath`) statt `react-native-html-to-pdf` (nativ, seit längerem nicht mehr aktiv gepflegt) — bewusst risikoärmer nach den nativen Stolpersteinen bei anderen Libraries. Layout "Freundlich" (von 4 Optionen ausgewählt, nach Feedback angepasst: Einkommen statt Restbudget oben). Fonts: Standard-Fonts (kein Custom-Embedding, siehe Lessons Learned). Datei-Speicherung via `react-native-fs`. **Teilen via `react-native-share`** (nicht mehr RNs eingebautes `Share` — das reicht auf Android einen rohen `file://`-Pfad weiter, den moderne Apps wie Google Drive ohne FileProvider-`content://`-Link ablehnen, siehe Lessons Learned #38). Braucht dafür einen `FileProvider`-Eintrag in `AndroidManifest.xml` + `file_paths.xml` + `MainApplication.kt implements ShareApplication`; auf iOS unverändert funktionsfähig. |
-| Netzwerkzugriff (toppreise.ch) | `fetch` (eingebaut, kein `axios` — keine weitere Dependency nötig). HTML wird deterministisch geparst (`parseToppreiseHtml`), nicht vom Modell gelesen; Cache als JSON-Datei über `react-native-fs`. |
+| Punkt                          | Entscheidung                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Programmiersprache / Framework | React Native + TypeScript (nicht Flutter)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| On-Device-LLM                  | Gemma 4 E2B-it (multimodal: Text + Vision + Audio) — **ersetzt Gemma 3 1B-IT vollständig** (ein Modell für alle Tabs, statt zwei parallel geladene Modelle; Begründung: einfachere Architektur, in Kauf genommener Trade-off ist der größere Download/RAM-Bedarf auch für die reinen Text-Flows)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Modell-Quelle                  | `litert-community/gemma-4-E2B-it-litert-lm` auf Hugging Face, Datei **`gemma-4-E2B-it.litertlm`** — **verifiziert per HuggingFace-API** (nicht geraten): exakt 2'588'147'712 Bytes (≈ 2.59 GB), Repo-Metadaten bestätigen `gated: false` (kein Login/Lizenz-Klick nötig, anders als beim alten Gemma-3-1B-IT-Repo). `react-native-litert-lm` exportiert die passende URL fertig als Konstante `GEMMA_4_E2B_IT`. Das Repo enthält zusätzlich Hardware-spezifische Varianten (Tensor G5, Intel LNL/PTL, Qualcomm) und eine Web/WASM-Variante (`-web.litertlm`/`.task`) — keine davon relevant für iPhone 12/Galaxy S21 FE, die generische `gemma-4-E2B-it.litertlm` ist richtig.                                                                                                                                                                                                                                                                  |
+| LLM-Runtime/Bibliothek         | `react-native-litert-lm@0.6.1` (LiteRT-LM-Engine 0.15.0) + `react-native-nitro-modules` (nicht llama.cpp/MediaPipe direkt). Explizit geprüft: Version unterstützt Gemma 4 nativ (Paketbeschreibung: "Optimized for Gemma 4"), kein Update nötig.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Kamera-/Beleg-Erfassung        | `react-native-image-picker` (`launchCamera()`/`launchImageLibrary()`) — bewusst statt `react-native-vision-camera`, da nur ein Einzelfoto benötigt wird, kein Live-Preview/Frame-Processing. Installiert und via `pod install` gelinkt, im Simulator verifiziert.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Beleg-Texterkennung (OCR)      | Eigenes natives Modul `ReceiptOCR` (`ios/budgetpilot/ReceiptOCR.swift` + `.m`-Bridge ohne Bridging-Header, per `xcodeproj`-Gem ins Xcode-Projekt eingebunden) um Apples `Vision`/`VNRecognizeTextRequest` — ersetzt die direkte Bild-Übergabe an Gemma 4 E2B-it (`sendMultimodalMessage`) für den Foto-Pfad. Begründung: kleine Multimodal-Modelle sind bei feinem Beleg-Druck unzuverlässig, dediziertes On-Device-OCR liest zuverlässiger, danach läuft derselbe Text-Extraktionspfad wie bei Freitext. Nur iOS umgesetzt, Android (z. B. ML Kit Text Recognition) noch offen.                                                                                                                                                                                                                                                                                                                                                                |
+| Zielplattformen                | Beide von Anfang an — iPhone 12 (iOS 15.1+) und Samsung Galaxy S21 FE                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Wichtige Einschränkung         | iOS-Simulator-Test nur auf Apple-Silicon-Mac (arm64) möglich — bei uns gegeben                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Backend für Inferenz           | `cpu` (GPU/Metal im Simulator unzuverlässig, ggf. später auf echtem Gerät testen)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Datenhaltung                   | Lokal, SQLite via **`@op-engineering/op-sqlite`** (JSI, kein Bridge-Overhead — relevant, weil Gemma-Inferenz und DB-Zugriffe sich dieselbe CPU teilen; autolinkt in bare RN, keine Expo-Abhängigkeit). Nicht `expo-sqlite` (zöge `expo`/expo-modules-core in ein Projekt ohne Expo) und nicht `react-native-sqlite-storage` (Callback-API, träge bei New Arch). Beträge als Integer-Rappen, Migrationen über `PRAGMA user_version`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| PDF-Erstellung                 | `pdf-lib` (reines JS, kein natives Modul/pod install nötig, manuelles Text-/Formen-Layout via `drawText`/`drawSvgPath`) statt `react-native-html-to-pdf` (nativ, seit längerem nicht mehr aktiv gepflegt) — bewusst risikoärmer nach den nativen Stolpersteinen bei anderen Libraries. Layout "Freundlich" (von 4 Optionen ausgewählt, nach Feedback angepasst: Einkommen statt Restbudget oben). Fonts: Standard-Fonts (kein Custom-Embedding, siehe Lessons Learned). Datei-Speicherung via `react-native-fs`. **Teilen via `react-native-share`** (nicht mehr RNs eingebautes `Share` — das reicht auf Android einen rohen `file://`-Pfad weiter, den moderne Apps wie Google Drive ohne FileProvider-`content://`-Link ablehnen, siehe Lessons Learned #38). Braucht dafür einen `FileProvider`-Eintrag in `AndroidManifest.xml` + `file_paths.xml` + `MainApplication.kt implements ShareApplication`; auf iOS unverändert funktionsfähig. |
+| Netzwerkzugriff (toppreise.ch) | `fetch` (eingebaut, kein `axios` — keine weitere Dependency nötig). HTML wird deterministisch geparst (`parseToppreiseHtml`), nicht vom Modell gelesen; Cache als JSON-Datei über `react-native-fs`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Ziel des POC
 
@@ -57,32 +113,44 @@ Nachweisen, dass BudgetPilot als On-Device-App (offline möglich) zuverlässig:
 ### In Scope
 
 1. **Dateneingabe**
-   - Monatliches Einkommen/Budget (z. B. "Ich habe 4500 CHF Einkommen, Fixkosten 1200 CHF Miete…")
-   - Wunschliste geplante Käufe (Freitext + strukturierte Eingabe)
+    - Monatliches Einkommen/Budget (z. B. "Ich habe 4500 CHF Einkommen, Fixkosten 1200 CHF Miete…")
+    - Wunschliste geplante Käufe (Freitext + strukturierte Eingabe)
 2. **On-Device KI (Gemma 4 E2B-it)**
-   - Extraktion: Betrag, Intervall (monatlich/einmalig), Händler/Produkt, Kategorie, Notizen
-   - Kategorisierung in vordefinierte Kategorien (Wohnen, Lebensmittel, Mobilität, Freizeit, Gesundheit, Abos, Sonstiges)
-   - Erklärbarkeit: kurze "Warum"-Begründung pro Zuordnung (1 Satz)
+    - Extraktion: Betrag, Intervall (monatlich/einmalig), Händler/Produkt, Kategorie, Notizen
+    - Kategorisierung in vordefinierte Kategorien (Wohnen, Lebensmittel, Mobilität, Freizeit, Gesundheit, Abos,
+      Sonstiges)
+    - Erklärbarkeit: kurze "Warum"-Begründung pro Zuordnung (1 Satz)
 3. **Preislogik**
-   - Manuell: Preis direkt eingeben
-   - toppreise.ch: Suche/Lookup (vereinfachte Schnittstelle) + Auswahl eines Preises
-   - Caching der zuletzt gefundenen Preise (offline-freundlich)
+    - Manuell: Preis direkt eingeben
+    - toppreise.ch: Suche/Lookup (vereinfachte Schnittstelle) + Auswahl eines Preises
+    - Caching der zuletzt gefundenen Preise (offline-freundlich)
 4. **Budgetberechnung**
-   - Summe Fixkosten + geplante Käufe
-   - Restbudget (absolut + Prozent)
-   - Warnungen bei Überschreitung
+    - Summe Fixkosten + geplante Käufe
+    - Restbudget (absolut + Prozent)
+    - Warnungen bei Überschreitung
 5. **Zusammenfassung & Export**
-   - KI-Textzusammenfassung — vereinfacht auf einen einzelnen Fliesstext-Absatz (kein Kurz-/Detail-Split, kein JSON mehr nötig, siehe Lessons Learned). Zahlen werden dem Modell als feststehende Fakten vorgegeben, um Rechenfehler zu vermeiden — verhindert aber nicht, dass die KI beim Umformulieren trotzdem falsche Zahlen einstreut (bestätigt, siehe Lessons Learned) — deshalb "KI · BITTE PRÜFEN"-Kennzeichnung im PDF
-   - PDF-Export (1–2 Seiten) — implementiert (`pdfExport.ts`), "Freundlich"-Layout: Einkommen/Restbudget als grosse Zahlen, farbige Kategorie-Chips + Datums-Pillen pro Posten, Zwischen- und Gesamtsumme, Fortschrittsbalken, Warnungs-Banner, KI-Zusammenfassungs-Box. Verifiziert im Simulator, automatischer Seitenumbruch vorhanden aber noch nicht mit genug Posten getestet.
+    - KI-Textzusammenfassung — vereinfacht auf einen einzelnen Fliesstext-Absatz (kein Kurz-/Detail-Split, kein JSON
+      mehr nötig, siehe Lessons Learned). Zahlen werden dem Modell als feststehende Fakten vorgegeben, um Rechenfehler
+      zu vermeiden — verhindert aber nicht, dass die KI beim Umformulieren trotzdem falsche Zahlen einstreut (bestätigt,
+      siehe Lessons Learned) — deshalb "KI · BITTE PRÜFEN"-Kennzeichnung im PDF
+    - PDF-Export (1–2 Seiten) — implementiert (`pdfExport.ts`), "Freundlich"-Layout: Einkommen/Restbudget als grosse
+      Zahlen, farbige Kategorie-Chips + Datums-Pillen pro Posten, Zwischen- und Gesamtsumme, Fortschrittsbalken,
+      Warnungs-Banner, KI-Zusammenfassungs-Box. Verifiziert im Simulator, automatischer Seitenumbruch vorhanden aber
+      noch nicht mit genug Posten getestet.
 6. **Offline-Nachweis**
-   - App bleibt funktionsfähig ohne Netzwerk (ausser toppreise.ch-Preisabruf) — **Grundprinzip bereits einzeln bestätigt** (KI-Antwort lief lokal ohne Server)
+    - App bleibt funktionsfähig ohne Netzwerk (ausser toppreise.ch-Preisabruf) — **Grundprinzip bereits einzeln
+      bestätigt** (KI-Antwort lief lokal ohne Server)
 7. **Kamera-/Beleg-Erfassung** — implementiert
-   - Kassenzettel/Belege per Kamera fotografieren oder aus der Galerie hochladen (`react-native-image-picker`, Auswahl-Dialog "Jetzt aufnehmen"/"Hochladen"), Gemma 4 E2B-it extrahiert über `sendMultimodalMessage()` dieselben Felder wie beim Freitext-Pfad (gleiches JSON-Schema, gleiche `buildDraftFromRaw()`-Normalisierung, gleicher DraftScreen)
-   - Entwurf-Screen zeigt das hochgeladene Foto zur Kontrolle direkt über den Feldern an
-   - Technisch im Simulator verifiziert, inhaltliche Genauigkeit bei echten Belegen aber noch ungenügend, siehe Status/Risiken
+    - Kassenzettel/Belege per Kamera fotografieren oder aus der Galerie hochladen (`react-native-image-picker`,
+      Auswahl-Dialog "Jetzt aufnehmen"/"Hochladen"), Gemma 4 E2B-it extrahiert über `sendMultimodalMessage()` dieselben
+      Felder wie beim Freitext-Pfad (gleiches JSON-Schema, gleiche `buildDraftFromRaw()`-Normalisierung, gleicher
+      DraftScreen)
+    - Entwurf-Screen zeigt das hochgeladene Foto zur Kontrolle direkt über den Feldern an
+    - Technisch im Simulator verifiziert, inhaltliche Genauigkeit bei echten Belegen aber noch ungenügend, siehe
+      Status/Risiken
 8. **Kalender-Ansicht** (neu, per Feedback) — implementiert
-   - Monatskalender (`react-native-calendars`) mit Punkt-Markierung an Tagen mit bereits erfassten Posten
-   - Antippen eines Tages öffnet "Ausgabe erfassen" mit vorausgefülltem Kaufdatum
+    - Monatskalender (`react-native-calendars`) mit Punkt-Markierung an Tagen mit bereits erfassten Posten
+    - Antippen eines Tages öffnet "Ausgabe erfassen" mit vorausgefülltem Kaufdatum
 
 ### Out of Scope (für POC)
 
@@ -95,11 +163,24 @@ Nachweisen, dass BudgetPilot als On-Device-App (offline möglich) zuverlässig:
 
 **Funktional**
 
-- Freitext-Parsing: ≥ 85 % der Testinputs werden korrekt in strukturierte Posten überführt (Betrag + Kategorie) — **systematische Messung (Golden Set, n=30, siehe Lessons Learned #30):** Betrag 30/30 (100%), Häufigkeit 30/30 (100%), Kategorie 27/30 (90%), komplett korrekt 27/30 (90%) — alle drei Zielwerte übertroffen, stabil über zwei Durchläufe (n=20 und n=30). Bewusst weiterhin ohne mehrdeutige/needs_input-Fälle in den Erwartungswerten, siehe dort.
-- Kategorisierung: ≥ 80 % Trefferquote auf einem kuratierten Testset (mind. 50 Beispiele) — 90% auf dem aktuellen n=30-Set (s. o.), Zielwert damit erreicht, Testset-Grösse aber noch unter der geplanten Zielgrösse von 50.
+- Freitext-Parsing: ≥ 85 % der Testinputs werden korrekt in strukturierte Posten überführt (Betrag + Kategorie) —
+  **systematische Messung (Golden Set, n=30, siehe Lessons Learned #30):** Betrag 30/30 (100%), Häufigkeit 30/30 (100%),
+  Kategorie 27/30 (90%), komplett korrekt 27/30 (90%) — alle drei Zielwerte übertroffen, stabil über zwei Durchläufe
+  (n=20 und n=30). Bewusst weiterhin ohne mehrdeutige/needs_input-Fälle in den Erwartungswerten, siehe dort.
+- Kategorisierung: ≥ 80 % Trefferquote auf einem kuratierten Testset (mind. 50 Beispiele) — 90% auf dem aktuellen
+  n=30-Set (s. o.), Zielwert damit erreicht, Testset-Grösse aber noch unter der geplanten Zielgrösse von 50.
 - Restbudget-Berechnung stimmt zu 100 % (deterministisch testbar)
-- PDF exportiert ohne Layoutfehler — **im Simulator bereits nachgewiesen** (mehrseitiger Umbruch über `PdfWriter` in `pdfExport.ts` ist vorbereitet, aber noch nicht mit genug Posten getestet, um einen echten Seitenumbruch auszulösen)
-- **Foto-Extraktion:** mit direkter Bild-Übergabe ans LLM 0/2 echte Kassenzettel korrekt extrahiert. Nach Umstellung auf Vision-OCR-first zunächst verbessert, aber weiterhin nicht zuverlässig; nach der Zeilen-Rekonstruktion über Bounding-Boxes (Lessons Learned #19) 3/3 echte Testbelege korrekt (100% Confidence). **Auf n=10 erweitert (Lessons Learned #39, Rohdaten bewusst nicht im Repo):** Betrag 9/10, Kategorie 9/10 (die eine Abweichung eine vertretbare Alternativ-Kategorisierung, keine Fehlklassifikation), Häufigkeit 10/10, komplett korrekt 8/10 (80%) — übertrifft damit weiterhin die 85%/80%-Ziele oben bei Häufigkeit/Kategorie, liegt beim Betrag knapp darunter (90% statt 85%+, aber der eine Fehlerfall ist ein bekanntes Bildqualitätsproblem — schräg fotografiert — kein neuer Fund). Bemerkenswert: die beiden bisher schwierigsten Beleg-Typen (mehrspaltige Artikeltabelle, Storno-/Rabattzeile mit Minus) liefen in diesem Durchlauf beide fehlerfrei durch.
+- PDF exportiert ohne Layoutfehler — **im Simulator bereits nachgewiesen** (mehrseitiger Umbruch über `PdfWriter` in
+  `pdfExport.ts` ist vorbereitet, aber noch nicht mit genug Posten getestet, um einen echten Seitenumbruch auszulösen)
+- **Foto-Extraktion:** mit direkter Bild-Übergabe ans LLM 0/2 echte Kassenzettel korrekt extrahiert. Nach Umstellung auf
+  Vision-OCR-first zunächst verbessert, aber weiterhin nicht zuverlässig; nach der Zeilen-Rekonstruktion über
+  Bounding-Boxes (Lessons Learned #19) 3/3 echte Testbelege korrekt (100% Confidence). **Auf n=10 erweitert (Lessons
+  Learned #39, Rohdaten bewusst nicht im Repo):** Betrag 9/10, Kategorie 9/10 (die eine Abweichung eine vertretbare
+  Alternativ-Kategorisierung, keine Fehlklassifikation), Häufigkeit 10/10, komplett korrekt 8/10 (80%) — übertrifft
+  damit weiterhin die 85%/80%-Ziele oben bei Häufigkeit/Kategorie, liegt beim Betrag knapp darunter (90% statt 85%+,
+  aber der eine Fehlerfall ist ein bekanntes Bildqualitätsproblem — schräg fotografiert — kein neuer Fund).
+  Bemerkenswert: die beiden bisher schwierigsten Beleg-Typen (mehrspaltige Artikeltabelle, Storno-/Rabattzeile mit
+  Minus) liefen in diesem Durchlauf beide fehlerfrei durch.
 
 **Privacy/Offline**
 
@@ -119,15 +200,36 @@ Nachweisen, dass BudgetPilot als On-Device-App (offline möglich) zuverlässig:
 
 ## Datenmodell (POC)
 
-- **BudgetMonth**: `income`, `items[]` — bewusst **eine** Liste statt getrennter `fixedCosts[]`/`plannedPurchases[]`; welcher Posten Fixkosten vs. geplanter Kauf ist, wird aus `item.cadence` abgeleitet (`monthly` → Fixkosten, `one_time` → geplanter Kauf), nicht separat gepflegt. Ggf. später explizite Trennung nötig, falls ein Posten mal beides sein soll (z. B. ein teilweise wiederkehrender Kauf) — aktuell nicht abbildbar.
-- **LineItem** (`budget.ts`): `id`, `description`, `amount`, `currency`, `cadence` (monthly/one_time), `category`, `source` (free_text/photo/manual/toppreise — `free_text` und `photo` aktuell angebunden, `manual`/`toppreise` noch nicht), `confidence`, `notes`, `date` (ISO `YYYY-MM-DD`, Kaufdatum — vom Nutzer im Entwurf-Screen als Freitextfeld "TT.MM.JJJJ" editierbar, vorausgefüllt mit dem heutigen Datum bzw. dem im Kalender-Tab angetippten Datum; kein Datums-Picker, um keine weitere native Dependency einzuführen; wird nicht vom Modell extrahiert)
-- **PriceResult**: `query`, `productName`, `price`, `shop`, `url`, `timestamp` — implementiert in `src/toppreise.ts`. Die Tabelle `price_results` und die Repository-Funktionen (`savePriceResult`/`listPriceResults`) existieren, werden aber noch von keinem Screen benutzt: der Preis-Cache liegt weiterhin als JSON-Datei (`react-native-fs`).
+- **BudgetMonth**: `income`, `items[]` — bewusst **eine** Liste statt getrennter `fixedCosts[]`/`plannedPurchases[]`;
+  welcher Posten Fixkosten vs. geplanter Kauf ist, wird aus `item.cadence` abgeleitet (`monthly` → Fixkosten,
+  `one_time` → geplanter Kauf), nicht separat gepflegt. Ggf. später explizite Trennung nötig, falls ein Posten mal
+  beides sein soll (z. B. ein teilweise wiederkehrender Kauf) — aktuell nicht abbildbar.
+- **LineItem** (`budget.ts`): `id`, `description`, `amount`, `currency`, `cadence` (monthly/one_time), `category`,
+  `source` (free_text/photo/manual/toppreise — `free_text` und `photo` aktuell angebunden, `manual`/`toppreise` noch
+  nicht), `confidence`, `notes`, `date` (ISO `YYYY-MM-DD`, Kaufdatum — vom Nutzer im Entwurf-Screen als Freitextfeld
+  "TT.MM.JJJJ" editierbar, vorausgefüllt mit dem heutigen Datum bzw. dem im Kalender-Tab angetippten Datum; kein
+  Datums-Picker, um keine weitere native Dependency einzuführen; wird nicht vom Modell extrahiert)
+- **PriceResult**: `query`, `productName`, `price`, `shop`, `url`, `timestamp` — implementiert in `src/toppreise.ts`.
+  Die Tabelle `price_results` und die Repository-Funktionen (`savePriceResult`/`listPriceResults`) existieren, werden
+  aber noch von keinem Screen benutzt: der Preis-Cache liegt weiterhin als JSON-Datei (`react-native-fs`).
 
-**Zwei Modelle, eine Umrechnungsstelle:** `budget.ts` ist das UI-/Engine-Modell (Franken als `number`, wie TextInput und `computeBudget` sie brauchen), `src/db/types.ts` das Persistenzmodell (Rappen als Integer, Typen heissen `LineItemRow`/`BudgetMonthRow`). Umgerechnet wird ausschliesslich in `src/db/mapping.ts`. Grund für Rappen: SQLite REAL ist ein float64, und `1200 + 39.90 + 149.90` ergibt dort `1389.8000000000002` — das Erfolgskriterium "Restbudget stimmt zu 100 %" ist mit Floats nicht haltbar (als Test festgehalten). Die DB-Zeile kennt zusätzlich `kind` (`income_deduction`/`fixed_cost`/`planned_purchase`/`expense`), `needs_input`, `user_edited` und `reason`; `kind` wird aktuell aus `cadence` abgeleitet, weil der Entwurf-Screen "schon gekauft" nicht von "geplant" unterscheidet.
+**Zwei Modelle, eine Umrechnungsstelle:** `budget.ts` ist das UI-/Engine-Modell (Franken als `number`, wie TextInput und
+`computeBudget` sie brauchen), `src/db/types.ts` das Persistenzmodell (Rappen als Integer, Typen heissen `LineItemRow`/
+`BudgetMonthRow`). Umgerechnet wird ausschliesslich in `src/db/mapping.ts`. Grund für Rappen: SQLite REAL ist ein
+float64, und `1200 + 39.90 + 149.90` ergibt dort `1389.8000000000002` — das Erfolgskriterium "Restbudget stimmt zu
+100 %" ist mit Floats nicht haltbar (als Test festgehalten). Die DB-Zeile kennt zusätzlich `kind` (`income_deduction`/
+`fixed_cost`/`planned_purchase`/`expense`), `needs_input`, `user_edited` und `reason`; `kind` wird aktuell aus `cadence`
+abgeleitet, weil der Entwurf-Screen "schon gekauft" nicht von "geplant" unterscheidet.
 
-Posten ohne Betrag bleiben als Zeile erhalten, fliessen aber in keine Summe ein (`amount_cents IS NOT NULL` in `computeTotals`) und erscheinen in `listItemsNeedingReview()` — die DB-seitige Hälfte der Fallback-Regel. Bewusst **nicht** auf `needs_input = 0` gefiltert: `needs_input` ist auch gesetzt, wenn nur die Kategorie fehlt, und ein solcher Posten hat einen gültigen Betrag, der mitzählen muss.
+Posten ohne Betrag bleiben als Zeile erhalten, fliessen aber in keine Summe ein (`amount_cents IS NOT NULL` in
+`computeTotals`) und erscheinen in `listItemsNeedingReview()` — die DB-seitige Hälfte der Fallback-Regel. Bewusst
+**nicht** auf `needs_input = 0` gefiltert: `needs_input` ist auch gesetzt, wenn nur die Kategorie fehlt, und ein solcher
+Posten hat einen gültigen Betrag, der mitzählen muss.
 
-`computeBudget(income, items)` (`budgetEngine.ts`) ist eine reine Funktion ohne React-Abhängigkeiten (keine Hooks, kein State, kein I/O) und liefert `totalFixedCosts`, `totalPlannedPurchases`, `totalSpent`, `restbudget`, `restbudgetPercent` und `warnings[]`. Getestet in `__tests__/budgetEngine.test.ts` (7 Fälle, u. a. Normalfall, Überschreitung, knappes Restbudget, `income === null`, leere Liste, Items mit `amount === null`, `income <= 0`).
+`computeBudget(income, items)` (`budgetEngine.ts`) ist eine reine Funktion ohne React-Abhängigkeiten (keine Hooks, kein
+State, kein I/O) und liefert `totalFixedCosts`, `totalPlannedPurchases`, `totalSpent`, `restbudget`, `restbudgetPercent`
+und `warnings[]`. Getestet in `__tests__/budgetEngine.test.ts` (7 Fälle, u. a. Normalfall, Überschreitung, knappes
+Restbudget, `income === null`, leere Liste, Items mit `amount === null`, `income <= 0`).
 
 ## KI-Teil: Prompts & Output-Format
 
@@ -154,19 +256,29 @@ Ziel: Immer strukturiertes JSON ausgeben, das nachträglich validiert werden kan
 - Wenn Betrag fehlt → Rückfrage/Markierung "needs_input"
 - Wenn Kategorie unsicher → Top-2 Kategorien + confidence anzeigen
 
-> Aktueller Stand: In App.tsx (`buildExtractionPrompt`) läuft bereits eine vereinfachte Variante produktiv — Modell antwortet mit einem einzelnen JSON-Objekt (kein `items`-Array), `category: "needs_input"` als Sentinel statt separatem `needs_input`-Array. Funktioniert im Simulator. Der ursprünglich entworfene, ausführlichere Extraktions-Prompt mit `items`-Array, `needs_input`- und `category_alternatives`-Arrays liegt separat in `entwurf-extraktion-prompt.md` — als Referenz für eine mögliche spätere Erweiterung (z. B. mehrere Posten pro Text, differenziertere Low-Confidence-Behandlung), aktuell aber nicht das, was im Code läuft.
+> Aktueller Stand: In App.tsx (`buildExtractionPrompt`) läuft bereits eine vereinfachte Variante produktiv — Modell
+> antwortet mit einem einzelnen JSON-Objekt (kein `items`-Array), `category: "needs_input"` als Sentinel statt separatem
+> `needs_input`-Array. Funktioniert im Simulator. Der ursprünglich entworfene, ausführlichere Extraktions-Prompt mit
+> `items`-Array, `needs_input`- und `category_alternatives`-Arrays liegt separat in `entwurf-extraktion-prompt.md` — als
+> Referenz für eine mögliche spätere Erweiterung (z. B. mehrere Posten pro Text, differenziertere
+> Low-Confidence-Behandlung), aktuell aber nicht das, was im Code läuft.
 
 ## Testplan (POC)
 
 1. **Golden Set:**
-   - ✅ Freitext-Budgets: volle 30 Fälle wie geplant umgesetzt (`src/goldenSet.ts` + Batch-Runner im LLM-Test-Screen, siehe Lessons Learned #30 für Ergebnis und Details)
-   - ✅ Wunschlistentexte: 14 Fälle für den deterministischen Preis-Matching-Schritt (`pickBestMatch`), siehe Lessons Learned #31 — deckt bewusst nur Schritt 2 des Preise-Flows ab (Suchbegriff → Treffer), nicht Schritt 1 (Freitext → Suchbegriff per Modell)
-   - ✅ Beleg-Fotos: von n=3 auf n=10 erweitert (`src/photoGoldenSet.ts`, **bewusst nicht im Repo**, siehe Lessons Learned #39), Durchführung manuell statt per Batch-Runner, da der Bildpicker keine automatisierte Mehrfachauswahl erlaubt
+    - ✅ Freitext-Budgets: volle 30 Fälle wie geplant umgesetzt (`src/goldenSet.ts` + Batch-Runner im LLM-Test-Screen,
+      siehe Lessons Learned #30 für Ergebnis und Details)
+    - ✅ Wunschlistentexte: 14 Fälle für den deterministischen Preis-Matching-Schritt (`pickBestMatch`), siehe Lessons
+      Learned #31 — deckt bewusst nur Schritt 2 des Preise-Flows ab (Suchbegriff → Treffer), nicht Schritt 1 (Freitext →
+      Suchbegriff per Modell)
+    - ✅ Beleg-Fotos: von n=3 auf n=10 erweitert (`src/photoGoldenSet.ts`, **bewusst nicht im Repo**, siehe Lessons
+      Learned #39), Durchführung manuell statt per Batch-Runner, da der Bildpicker keine automatisierte Mehrfachauswahl
+      erlaubt
 2. **Automatisierte Tests**
-   - Parser/Validator Unit Tests
-   - Budget Engine deterministic tests
+    - Parser/Validator Unit Tests
+    - Budget Engine deterministic tests
 3. **Manuelle UX-Tests**
-   - 5 Testpersonen, 30 Minuten Session, Beobachtung + Feedback
+    - 5 Testpersonen, 30 Minuten Session, Beobachtung + Feedback
 
 ## Risiken & Mitigation
 
@@ -174,129 +286,827 @@ Ziel: Immer strukturiertes JSON ausgeben, das nachträglich validiert werden kan
 - Performance/Memory → Quantisierung, Prompt kürzen, Batching vermeiden, Lazy Loading
 - Offline-Preisabruf → Mock + Cache; klare UI "Preisabruf benötigt Internet"
 - Datenschutz → keine Telemetrie mit Finanztext; optional nur anonyme Event-Zähler
-- **Neu (aus Praxis):** Bibliotheken können anhand von Dateinamen/Heuristiken falsche Annahmen treffen (siehe Lessons Learned) → Konfiguration immer explizit setzen, nicht auf Auto-Erkennung verlassen
-- **Neu:** Gemma 4 E2B-it braucht laut Library-Doku min. 4 GB RAM — das iPhone 12 hat insgesamt nur 4 GB → echtes OOM/Jetsam-Risiko auf diesem Zielgerät. **Bereits im Mac-Simulator real aufgetreten** (siehe Lessons Learned #5) — auf dem Zielgerät mit fixem 4-GB-Limit (kein Freiräumen wie am Mac möglich) vermutlich noch kritischer. Mitigation: vor Geräte-Testing Xcode-Instruments-Messung, ggf. `maxContextTokens` reduzieren oder auf das kleinere Gemma 3 1B-IT zurückfallen, falls sich das Risiko bestätigt.
-- **Neu, bestätigt (Foto-Extraktion halluziniert):** Bei 2 von 2 getesteten *echten* fotografierten Kassenzetteln (Coop Restaurant, CHF 9.95 und CHF 37.10) hat Gemma 4 E2B-it bei direkter Bild-Übergabe den Betrag und die Beschreibung komplett falsch extrahiert (u. a. "Kauf von einem Kaktus" für einen Kaffee/Saft-Beleg) — einmal davon mit fälschlich hoher Confidence (95%), was das Confidence-basierte Sicherheitsnetz aushebelt. Die technische Bildübertragung ist nachweislich korrekt (Byte-Länge geprüft, reales JPEG kommt an), es handelt sich also um eine echte Modell-Grenze bei der Fein-Text-/OCR-Lesung aus Fotos, nicht um einen Integrationsbug. **Mitigation umgesetzt (siehe Lessons Learned #14):** Vision-Framework-OCR liest den Beleg-Text jetzt vor, das LLM bekommt nur noch Text statt Bild. **Update (siehe Lessons Learned #19):** das ursprünglich verbleibende Risiko — falsche, unbegründet selbstsichere Zahl bei mehrspaltigen Tabellen-Belegen — ist mit der Bounding-Box-Zeilen-Rekonstruktion + der deterministischen TOTAL-Regex-Absicherung (`findTotalAmountInOcrText`) inzwischen behoben: alle 3 echten Testbelege, inklusive genau des hier beschriebenen mehrspaltigen Migros-Falls, liefern seitdem 100% Confidence UND den korrekten Betrag. Weiterhin offen bleibt nur die Stichprobengrösse (n=3, kein belastbares Golden Set) und echte Handyfoto-Bildqualität (Unschärfe/Schräglage) als eigene, unabhängige Fehlerquelle.
+- **Neu (aus Praxis):** Bibliotheken können anhand von Dateinamen/Heuristiken falsche Annahmen treffen (siehe Lessons
+  Learned) → Konfiguration immer explizit setzen, nicht auf Auto-Erkennung verlassen
+- **Neu:** Gemma 4 E2B-it braucht laut Library-Doku min. 4 GB RAM — das iPhone 12 hat insgesamt nur 4 GB → echtes
+  OOM/Jetsam-Risiko auf diesem Zielgerät. **Bereits im Mac-Simulator real aufgetreten** (siehe Lessons Learned #5) — auf
+  dem Zielgerät mit fixem 4-GB-Limit (kein Freiräumen wie am Mac möglich) vermutlich noch kritischer. Mitigation: vor
+  Geräte-Testing Xcode-Instruments-Messung, ggf. `maxContextTokens` reduzieren oder auf das kleinere Gemma 3 1B-IT
+  zurückfallen, falls sich das Risiko bestätigt.
+- **Neu, bestätigt (Foto-Extraktion halluziniert):** Bei 2 von 2 getesteten *echten* fotografierten Kassenzetteln (Coop
+  Restaurant, CHF 9.95 und CHF 37.10) hat Gemma 4 E2B-it bei direkter Bild-Übergabe den Betrag und die Beschreibung
+  komplett falsch extrahiert (u. a. "Kauf von einem Kaktus" für einen Kaffee/Saft-Beleg) — einmal davon mit fälschlich
+  hoher Confidence (95%), was das Confidence-basierte Sicherheitsnetz aushebelt. Die technische Bildübertragung ist
+  nachweislich korrekt (Byte-Länge geprüft, reales JPEG kommt an), es handelt sich also um eine echte Modell-Grenze bei
+  der Fein-Text-/OCR-Lesung aus Fotos, nicht um einen Integrationsbug. **Mitigation umgesetzt (siehe Lessons Learned
+  #14):** Vision-Framework-OCR liest den Beleg-Text jetzt vor, das LLM bekommt nur noch Text statt Bild. **Update (siehe
+  Lessons Learned #19):** das ursprünglich verbleibende Risiko — falsche, unbegründet selbstsichere Zahl bei
+  mehrspaltigen Tabellen-Belegen — ist mit der Bounding-Box-Zeilen-Rekonstruktion + der deterministischen
+  TOTAL-Regex-Absicherung (`findTotalAmountInOcrText`) inzwischen behoben: alle 3 echten Testbelege, inklusive genau des
+  hier beschriebenen mehrspaltigen Migros-Falls, liefern seitdem 100% Confidence UND den korrekten Betrag. Weiterhin
+  offen bleibt nur die Stichprobengrösse (n=3, kein belastbares Golden Set) und echte Handyfoto-Bildqualität
+  (Unschärfe/Schräglage) als eigene, unabhängige Fehlerquelle.
 
 ## Lessons Learned (bisher)
 
-1. **npm Script-Genehmigung:** Neuere npm-Versionen blockieren automatisch ausgeführte "postinstall"-Skripte von Paketen (Sicherheitsfeature). Lösung: Skript-Quellcode vor Freigabe geprüft (lädt nur offizielles, signiertes iOS-Framework von GitHub Releases), dann gezielt freigegeben.
-2. **Multimodal-Bug (mit Gemma 3 1B-IT, inzwischen nicht mehr relevant):** `react-native-litert-lm` erkennt anhand des Dateinamens ("gemma3" oder "3n" im Pfad), ob ein Modell multimodal ist, und nimmt dann automatisch ein GPU-Vision-Backend an. Da unsere damalige Datei `gemma3-1b-it-int4.litertlm` hiess, das Modell aber rein textbasiert war, schlug die Engine-Initialisierung zunächst fehl ("Failed to create conversation context"). Fix: `multimodal: false` explizit übergeben.
-3. **Modellname beim Umstieg auf Gemma 4 E2B-it falsch geraten, dann per API korrigiert:** Die ursprüngliche Annahme war die Datei heisse `gemma-4-E2B-it-litert-lm.litertlm` (das ist der Repo-Name, nicht der Dateiname). Per HuggingFace-API-Abfrage der echten Repo-Dateiliste verifiziert: die korrekte Datei heisst **`gemma-4-E2B-it.litertlm`** (2'588'147'712 Bytes), und `react-native-litert-lm` exportiert dafür bereits die fertige Konstante `GEMMA_4_E2B_IT`. **Lehre:** bei Modell-Dateinamen nie aus dem Repo-Namen ableiten/raten, sondern die Repo-Dateiliste (oder eine von der Library mitgelieferte Konstante) direkt prüfen. Ausserdem verifiziert: Repo ist `gated: false` (kein Login/Lizenz-Klick nötig, anders als beim alten Gemma-3-1B-IT-Repo), und die installierte `react-native-litert-lm`-Version unterstützt Gemma 4 nativ (kein Update nötig). Die Dateinamens-Heuristik für `multimodal` (sucht nur "gemma3"/"3n") betrifft `gemma-4-E2B-it.litertlm` ohnehin nicht — wir setzen `multimodal: true` trotzdem explizit, um uns nicht auf Zufall zu verlassen.
-4. **Modellpfad war bisher hartcodiert** (absoluter Pfad auf dem Mac) — funktionierte nur im iOS-Simulator. Mit dem Umstieg auf Gemma 4 E2B-it **gelöst für dieses Modell**: `useModel(GEMMA_4_E2B_IT, …)` übergibt jetzt eine HTTPS-URL statt eines lokalen Pfads, die Library lädt und cached die Datei selbst über ihre `ModelRegistry` — funktioniert dadurch auch auf echten Geräten, kein manueller In-App-Download-Mechanismus mehr nötig.
-5. **RAM-Risiko real aufgetreten (Mac-Simulator):** Beim ersten echten Download+Load-Versuch schlug das Laden mit `MemoryError: Refusing to load model (2468 MB): Estimated usage exceeds available memory by ~275 MB` fehl — der Pre-Flight-Check der Library (dokumentiertes Sicherheitsfeature) hat das Laden aktiv verweigert, weil dem Mac zu diesem Zeitpunkt zu wenig freier Speicher zur Verfügung stand. Nach Schliessen ein paar speicherhungriger Apps (freie `vm_stat`-Pages von ~62 MB auf ~1.6 GB gestiegen) und komplettem Neustart der App (`simctl terminate` + `launch`) lud das Modell danach sofort erfolgreich. **Lehre:** dieser Fehler zeigt sich nicht als Absturz, sondern nur als leise fehlschlagender `error`-State im `useModel`-Hook — der `EntryScreen` zeigte diesen `error`-State ursprünglich gar nicht an (nur der LLM-Test-Screen tat das), der Nutzer wäre bei einem endlos ladenden Screen ratlos geblieben. Inzwischen behoben: `ExpenseFlow` zeigt `model.error` jetzt ebenfalls im Status-Text an. Für echte Geräte mit fixem RAM-Limit (kein Freiräumen möglich wie am Mac) ist das trotzdem ein ernstzunehmendes Risiko, siehe oben.
-6. **JPEG-Qualität bei Foto-Erfassung von 0.7 auf 1.0 erhöht:** Als möglicher Beitrag zur Foto-Halluzinations-Problematik — niedrigere JPEG-Qualität könnte feine Beleg-Schrift durch Kompressionsartefakte zusätzlich verschlechtern. Ursprüngliche Annahme "wirkt sich nur auf `launchCamera()` aus, nicht auf `launchImageLibrary()`-Uploads bereits bestehender Dateien" war vermutlich falsch: derselbe Testbeleg (`test-quittung.jpg`, Coop Pratteln) lieferte mit `quality: 1.0` per Upload ein anderes Ergebnis (korrektes `needs_input` statt vorher falscher Betrag mit 95% Confidence) als zuvor mit `quality: 0.7` — die Library scheint auch Library-Bilder beim Export neu zu komprimieren. **Einschränkung:** nur eine Einzelbeobachtung (n=1) ohne Kontrolle der resultierenden Bytegrösse, Modell-Sampling ist ausserdem nicht vollständig deterministisch — kein belastbarer Beweis, aber ein Hinweis, dass sich eine spätere systematischere Untersuchung lohnen könnte.
-7. **Fast Refresh setzt einen laufenden Modell-Download zurück:** Während des ersten ~2.6-GB-Downloads führte jede noch so kleine Code-Änderung in `App.tsx` (auch nur eine geänderte Konstante) zu einem von React Native automatisch ausgelösten vollständigen Reload, der `useModel` neu mountete und `loadModel()` erneut von einem niedrigeren Fortschritt startete (beobachtete Sprünge z. B. 26%→22%, 36%→8%). **Lehre:** während eines laufenden großen Downloads/Ladevorgangs keine Code-Änderungen vornehmen — der Download läuft sonst nie durch. Falls doch nötig, Fortschritt danach neu beobachten statt anzunehmen, dass er weiterläuft.
-8. **`console.log`/`console.error` landen bei diesem Setup nicht zuverlässig im Metro-Terminal oder im `xcrun simctl log stream`:** Für Debugging der rohen Modell-Antworten musste stattdessen ein `Alert.alert(...)` direkt in der UI verwendet werden, um Werte (z. B. `imageBuffer.byteLength`, rohe JSON-Antwort) sichtbar zu machen. `console.error` erscheint immerhin im nativen System-Log (z. B. der `MemoryError` oben), `console.log` dagegen nicht.
-9. **Konversationshistorie akkumuliert über alle `generate()`-Aufrufe hinweg (wichtiger Fund):** `react-native-litert-lm` hält standardmässig **eine einzige, fortlaufende Konversation** im geladenen Modell — jeder `generate()`/`execute()`-Aufruf hängt sich an die Historie aller vorherigen Aufrufe an, egal aus welchem Screen. Das führte zu beobachtbarer Kontext-Verschmutzung: eine PDF-Kurzzusammenfassung antwortete mit "Kopfhörer" (Rest aus dem LLM-Test-Default-Prompt), und der LLM-Test-Screen lieferte nach vielen Testläufen "komische" Antworten auch auf einfache Fragen. **Fix:** `model.reset()` (wrappt `resetConversation()`) wird jetzt vor jedem unabhängigen, einmaligen `generate()`-Aufruf aufgerufen (LLM-Test, Freitext-Extraktion, PDF-Zusammenfassung) — das behebt beides. **Wichtig für zukünftige Features:** jeder neue Ort, der `generate()`/`execute()` für eine in sich abgeschlossene Anfrage nutzt, braucht vorher ein `reset()`, sonst wiederholt sich das Problem.
-10. **KI hielt sich nicht zuverlässig an JSON-Formatanweisungen, auch mit sauberem Kontext:** Der ursprüngliche PDF-Zusammenfassungs-Prompt verlangte JSON (`{"short":...,"detailed":...}`), das Modell antwortete aber teils mit reinem Fließtext statt JSON, obwohl der Prompt explizit "AUSSCHLIESSLICH JSON" verlangte und die Konversation frisch resettet war (siehe Punkt 9) — nicht reproduzierbar, trat unregelmässig auf. **Gelöst durch Vereinfachung statt Workaround:** Der Prompt verlangt inzwischen gar kein JSON mehr, sondern nur noch einen einzelnen Fliesstext-Absatz (passend zum "Freundlich"-PDF-Layout, das ohnehin nur eine KI-Box statt zwei vorsieht) — dadurch entfällt das Parsing-Problem komplett. Für zuverlässiges strukturiertes JSON böte sich bei Bedarf `enableStructuredOutput`/`responseSchema` der Library an (constrained decoding, siehe deren README), aktuell nicht nötig.
-11. **Custom-Font-Embedding (Fraunces/Karla via `pdf-lib` + `@pdf-lib/fontkit`) scheiterte unter Hermes, obwohl in Node fehlerfrei:** WOFF-Fontdateien wurden als Base64-Konstanten eingebettet; das Laden warf keinen Fehler, aber alle Glyphen wurden als unleserliche Punkte/Striche gerendert. Ein identischer Test mit denselben Font-Bytes lief in einem reinen Node-Skript einwandfrei — die Ursache liegt also spezifisch in der Hermes/React-Native-Laufzeit (z. B. `@pdf-lib/fontkit` + `pako`-Dekompression), nicht am eigenen Base64-Decoder (byteweise gegen Node's `Buffer` verifiziert, identisch). **Fix: auf pdf-lib-Standard-Fonts umgeschwenkt** (`Times-Italic` für die grossen "Hero"-Zahlen, `Helvetica`/`HelveticaBold` sonst) statt weiter Zeit in die Fehlersuche zu stecken — genau der Fallback, der im Auftrag für diesen Fall vorgesehen war. `@pdf-lib/fontkit` und die generierten Font-Base64-Dateien wurden wieder entfernt.
-12. **`pdf-lib`s `drawSvgPath` erwartet die obere linke Ecke als Anker, nicht die untere:** Beim Bau einer eigenen `drawRoundedRect()`-Hilfsfunktion (abgerundete Rechtecke gibt es in `pdf-lib` nicht nativ) wurde `y` fälschlich wie bei `drawRectangle`/`drawText` als **untere** linke Ecke behandelt. Das verschiebt jede Form um ihre eigene Höhe nach unten — bei unterschiedlich hohen Formen (Karte 34pt vs. Chip 16pt) fallen Chip und Karte dadurch sichtbar auseinander. **Fix:** `drawRoundedRect()` nimmt weiterhin `y` = untere Ecke entgegen (konsistent zum Rest des Codes) und rechnet intern selbst auf die von `drawSvgPath` erwartete obere Ecke um (`y + height`), statt dass jede Aufrufstelle das selbst berücksichtigen müsste.
-13. **KI erfindet auch beim reinen Umformulieren vorgegebener Zahlen neue Werte:** Obwohl der PDF-Zusammenfassungs-Prompt die korrekte Restbudget-Prozentzahl (z. B. 32.3%) explizit als feststehenden Fakt vorgibt ("verwende ausschliesslich diese Zahlen"), hat das Modell im Fliesstext wiederholt einen anderen, erfundenen Wert (z. B. "22%") ausgegeben. Bestätigt über mehrere Exporte hinweg reproduzierbar. Genau dafür ist die KI-Box im PDF mit "KI · BITTE PRÜFEN" gekennzeichnet — bewusst keine Korrektur, da eine zuverlässige Lösung eine grössere Umstellung bräuchte (z. B. Platzhalter-Vorlagen statt freier KI-Formulierung, damit die KI nur noch Ton/Stil beisteuert und keine Zahlen mehr selbst wiedergibt).
-14. **Vision-Framework-OCR statt direkter Bild-Übergabe verbessert die Foto-Extraktion, löst sie aber nicht vollständig:** Da Gemma 4 E2B-it bei direkter Bild-Übergabe (`sendMultimodalMessage`) 0/2 echte Kassenzettel korrekt gelesen hat (siehe Risiken), wurde die Pipeline umgebaut: ein eigenes natives Swift-Modul (`ReceiptOCR`, per `VNRecognizeTextRequest`) liest den Beleg-Text zuerst per Vision-Framework aus, danach läuft der erkannte Rohtext über denselben, bereits bewährten Freitext-Extraktionspfad (`buildExtractionPrompt`-Familie) statt über den Bild-Pfad. Technisch als Swift-Klasse + separate `.m`-Bridge-Datei umgesetzt, bewusst **ohne** Bridging-Header (Resolver/Rejecter-Parameter als plain `(Any?) -> Void`/`(String?, String?, Error?) -> Void` statt der React-Typalias, damit die Swift-Datei kein React importieren muss) — Standard-Pattern für Swift-Module ohne bestehenden Bridging-Header. Neue Dateien mussten per `xcodeproj`-Ruby-Gem ins Xcode-Projekt eingetragen werden (reines Ablegen im Dateisystem reicht nicht); dabei zunächst falsche relative Pfade gesetzt (Datei-Referenzen dieses Projekts tragen den vollen `budgetpilot/…`-Pfad direkt am File-Ref statt am Gruppen-Objekt) — Build brach mit "Build input file cannot be found" ab, bis die Pfade korrigiert wurden. **Ergebnis nach n=2 (nicht repräsentativ):** deutliche Verbesserung gegenüber der reinen Bild-Extraktion (keine kompletten Halluzinationen wie "Kaktus" mehr), aber noch nicht zuverlässig — ein einspaltiger Beleg lieferte einen plausiblen Betrag (10 statt 9.95) mit konfidenter, korrekter Kategorie; ein Beleg mit mehrspaltiger Artikel-Tabelle lieferte einen komplett falschen Betrag (5901 statt 37.10, vermutlich Ziffern aus zwei verschiedenen Tabellenspalten zusammengeklebt, da Vision zeilenweise statt spaltenweise liest) **ohne** Low-Confidence-Warnung — das gefährliche "falsch aber selbstsicher"-Muster besteht also fort, nur bei anderen Beleg-Typen. Nur iOS umgesetzt, kein Android-Äquivalent.
-15. **Explizites Thinking Mode löst die Foto-Extraktion NICHT — negativer Befund, gegen Google AI Edge Gallery getestet:** Nutzer-Beobachtung: dieselben zwei Testbelege wurden in Google AI Edge Gallery (Gemma 4, "Thinking Mode" dort als sichtbarer Toggle) korrekt gelesen, direkt bei uns aber nicht — Hypothese war, dass unsere Library Thinking Mode nicht nutzt. Recherche ergab: `react-native-litert-lm` unterstützt `thinking` (`ExecuteOptions.thinking`/`LLMConfig.thinking`, `{enabled, tokenBudget}`, Gemma 4 + LiteRT-LM 0.15+) und laut Typdefinitionen ist es bereits standardmässig aktiv (`enabled: true`, `tokenBudget: -1`) — wir hatten es also vermutlich schon die ganze Zeit an, nur nie explizit gesetzt. Zum sauberen Test trotzdem explizit `thinking: { enabled: true, tokenBudget: -1 }` in `useModel()` gesetzt UND vorübergehend zurück auf den direkten Bild-Pfad (`sendMultimodalMessage`, wie Edge Gallery) gewechselt, um 1:1 zu vergleichen. **Ergebnis bei beiden Testbelegen identisch:** 0% Confidence, "Keine Lesbarkeit"/"unleserlich", alles needs_input — das Modell verweigert jetzt ehrlich die Antwort, statt (wie vorher ohne explizites Thinking) einen falschen Betrag mit fälschlich hoher Confidence zu erfinden. Sicherer, aber inhaltlich weiterhin nicht der Edge-Gallery-Erfolg. **Schluss:** Thinking Mode ist nicht die fehlende Zutat — der Unterschied zu Edge Gallery liegt vermutlich an Bildvorverarbeitung/-auflösung, Backend (`cpu` bei uns, siehe Tech-Entscheidungen) oder einer anderen Modell-Quantisierung dort, nicht ungetestet. Direkter Bild-Pfad danach wieder auf die Vision-OCR-Pipeline (Punkt 14) zurückgesetzt, die für dieselben Belege bessere Ergebnisse lieferte; `thinking: { enabled: true, tokenBudget: -1 }` bleibt aber explizit gesetzt (schadet nicht, hilft evtl. beim Text-Extraktionsschritt der OCR-Pipeline). **Nachtest der OCR-Pipeline selbst mit explizitem Thinking (byte-identischer Code zu Punkt 14, einziger Unterschied die `thinking`-Config):** beim einspaltigen Beleg (CHF 9.95) diesmal eine treffendere Beschreibung ("Restaurantbesuch/Kaffee" statt "Gesamtbetrag der Ausgabe") bei gleichem Betrag (10) — sah zunächst nach echter Verbesserung aus. Der mehrspaltige Beleg (CHF 37.10) widerlegt das aber: Betrag weiterhin falsch (**5.901** — dieselben Ziffern wie zuvor "5901", nur mit eingefügtem Dezimalpunkt, also derselbe zugrundeliegende Spalten-Verwechslungsfehler), diesmal aber mit **95% Confidence statt gar keiner Warnung** — tendenziell eine Verschlechterung der Confidence-Kalibrierung, nicht des eigentlichen Lesefehlers. **Einordnung:** die bessere Formulierung beim ersten Beleg ist wahrscheinlich normale Sampling-Streuung (Gemma 4 E2B-it sampelt nicht deterministisch), keine belastbare Verbesserung durch Thinking — n=2 pro Konfiguration ist dafür ohnehin zu wenig. Für eine echte Aussage bräuchte es mehrere Wiederholungen desselben Belegs mit und ohne `thinking`, um Sampling-Rauschen von einem echten Effekt zu trennen.
-16. **Klärender Test mit einem KI-generierten, sauberen Beleg (statt einem echten Foto):** ein synthetischer Kassenzettel (klarer Kontrast, einfache Monospace-Schrift, einspaltiges Layout ohne Menge/Einzelpreis/Total nebeneinander in einer Zeile — "KINO ARENA CINEMAS", TOTAL CHF 50.00) wurde über die Vision-OCR-Pipeline (Punkt 14/15) **zu 100% korrekt** extrahiert: Beschreibung "Kinoerlebnis (Kinoticket und Popcorn)", Betrag 50, Kategorie "Freizeit", 100% Confidence. **Einordnung:** das grenzt die bisherigen Fehlerquellen deutlich ein — die OCR+LLM-Pipeline selbst funktioniert einwandfrei bei sauberer Eingabe; die bisherigen Probleme bei den beiden echten fotografierten Belegen (Coop Pratteln/Basel) liegen also konkret an (a) Foto-typischen Bildqualitätsproblemen (Beleuchtung, leichte Unschärfe/Schräglage, Thermopapier-Druck) und (b) mehrspaltigen Tabellen-Layouts, die Vision beim zeilenweisen statt spaltenweisen Lesen durcheinanderbringen (siehe Punkt 14) — nicht an einem grundsätzlichen Defekt im OCR-first-Ansatz. Deutlich optimistischere Einordnung als "Foto-Extraktion funktioniert nicht": eher "funktioniert bei sauberen/einfachen Belegen zuverlässig, kämpft noch mit echten Handy-Fotos und komplexen Tabellen-Layouts".
-17. **Neuer Fehlertyp: falscher Betrag unter mehreren echten Totalen ausgewählt (Fremdwährungs-Kartenzahlung):** ein dritter echter Testbeleg (Migros, viele Artikel) enthält zwei Totale — "Total CHF 150.00" (eigentlicher Einkaufsbetrag) und darunter "Visa / Total in EUR 154.64" (Fremdwährungs-Umrechnung der Kartenzahlung, Dynamic Currency Conversion, wie schon beim CHF-37.10-Beleg mit der "Local currency"-Zeile). Das Modell hat **154.64 EUR** übernommen statt 150.00 CHF — keine Halluzination (beide Zahlen stehen wirklich auf dem Beleg, korrekt mit passender Währung "EUR" ausgegeben), aber die falsche Wahl für eine Schweizer Budget-App, die überall sonst mit CHF rechnet. 95% Confidence, keine Warnung. **Fix:** `buildReceiptOcrExtractionPrompt()` weist das Modell jetzt explizit an, bei mehreren Totalen/Währungen den CHF-Betrag zu bevorzugen (Fremdwährungs-Umrechnungszeilen wie "Total in EUR"/"Local currency" zu ignorieren).
-18. **Unbegrenztes Thinking-Budget hat beim CHF-Fix-Test einen echten Fehler ausgelöst — `maxOutputTokens` deckt Denken UND Antwort zusammen ab:** beim erneuten Test des Migros-Belegs (Punkt 17) nach dem Prompt-Fix schlug die Extraktion mit "Keine JSON-Antwort im Modell-Output gefunden" fehl. Ursache: `maxOutputTokens` hat laut Library-Doku einen Default von 1024 Tokens, der Denk- UND Antwort-Tokens gemeinsam deckelt. Mit `thinking.tokenBudget: -1` (unbegrenzt, siehe Punkt 15) hat das Modell bei diesem komplexeren Beleg (viele Artikel, plus der längere Prompt aus Punkt 17) sein gesamtes Output-Budget mit internem Denken aufgebraucht, bevor es je zur JSON-Antwort kam — die Antwort bricht dadurch ohne schliessende `}` ab. **Fix:** `tokenBudget` von `-1` auf `512` gedeckelt und `maxOutputTokens` von implizit 1024 auf explizit `2048` erhöht, damit nach dem Denken sicher noch Platz für die Antwort bleibt. **Lehre:** ein unbegrenztes Denk-Budget ist ohne eine entsprechend grosszügige `maxOutputTokens`-Grenze riskant — beide Werte gehören zusammen betrachtet, nicht isoliert. **Beide Fixes (Punkt 17 + 18) am selben Migros-Beleg verifiziert:** danach korrekt 150 CHF (statt 154.64 EUR), Kategorie Lebensmittel, keine JSON-Fehler mehr.
-19. **Durchbruch: Vision-Observations nach Bounding-Box zu Zeilen rekonstruiert statt roher Erkennungsreihenfolge — löst das eigentliche Kernproblem der Foto-Extraktion.** Mit `Alert.alert()` zum Debuggen (siehe Lessons Learned #8) den rohen OCR-Text des CHF-9.95-Belegs sichtbar gemacht: Vision gibt Text NICHT in visueller Zeilen-Reihenfolge zurück, sondern gruppiert offenbar nach Spalten — bei diesem zweispaltigen Beleg (Label links, Betrag rechts) kamen ALLE Labels ("TOTAL CHF", "BAR", "Zurück CHF") zuerst, und die zugehörigen Zahlen ("9.95", "10.00", "-0.05") erst viel später als eigene, von den Labels komplett losgelöste Gruppe. Das erklärt rückblickend alle bisherigen Fehlversuche (Punkt 14, 17, mehrere Prompt-Iterationen in dieser Session) — kein Prompt-Text kann "welche Zahl gehört zu TOTAL" beantworten, wenn Label und Zahl im OCR-Text gar nicht mehr benachbart sind. **Fix (`ReceiptOCR.swift`):** `VNRecognizedTextObservation.boundingBox` jeder Observation genutzt, um Text mit ähnlicher vertikaler Position (`midY`, Toleranz 0.015) als eine Zeile zu gruppieren (oben nach unten sortiert) und innerhalb einer Zeile nach `minX` von links nach rechts zu ordnen — rekonstruiert damit z.B. "TOTAL CHF 9.95" wieder als zusammenhängende Zeile, genau wie sie auf dem Beleg zu sehen ist. Zusätzlich eine deterministische Regex (`findTotalAmountInOcrText`, analog zu `findDateInText` beim Freitext-Datum) ergänzt, die die erste "TOTAL &lt;Währung&gt; &lt;Betrag&gt;"-Stelle im (jetzt korrekt rekonstruierten) OCR-Text findet und den vom Modell gelieferten Betrag/Währung überschreibt, statt dem Modell die Auswahl unter mehreren Zahlen zu überlassen. Währungscode nach "TOTAL" bewusst zur Pflicht gemacht (nicht nur `\bTOTAL\b` + nächste Zahl), weil eine erste, zu lockere Version fälschlich "Sie sparen total 2.23" (Rabatt-Summe ohne Währungscode) statt "Total CHF 150.00" gematcht hat. **Ergebnis: alle drei echten Testbelege (Punkt 14, 17) liefern jetzt 100% Confidence und den korrekten Betrag** (9.95 / 37.10 / 150 CHF) — inklusive des vorher hartnäckigsten Falls (mehrspaltige Migros-Artikeltabelle). **Lehre:** bei OCR-Pipelines liegt der Schlüssel oft in der Text-Rekonstruktion (räumliche Zuordnung von Label und Wert), nicht im nachgelagerten Prompt — Prompt-Tuning kann eine strukturell verlorene Zuordnung nicht zurückholen, egal wie viele Beispiele/Anweisungen man hinzufügt.
-20. **Erster Android-Build-Versuch (Emulator `Pixel_10_Pro`, API 37): `minSdkVersion`-Fix funktioniert, aber zwei tiefere, noch ungelöste Probleme gefunden.** Anlass: Nutzer-Frage, ob die iOS-spezifische Vision-OCR-Lösung nicht ohnehin überflüssig sei, wenn Gemma 4 + Thinking Mode reicht — Antwort: nein, siehe Punkt 15 (direkter Bild-Pfad mit Thinking hat auf iOS schon versagt), aber die Frage motivierte den ersten echten Android-Testlauf.
-    - **Build-Fehler #1 (gelöst):** `uses-sdk:minSdkVersion 24 cannot be smaller than version 26 declared in library [:react-native-litert-lm]` — Manifest-Merge-Konflikt, da `android/build.gradle` noch `minSdkVersion 24` gesetzt hatte, `react-native-litert-lm` aber API 26 verlangt. **Fix:** auf `minSdkVersion 26` erhöht (Ziel-Gerät Galaxy S21 FE läuft mit API 31, also unproblematisch). Nach dem Fix baut und installiert die App erfolgreich.
-    - **Laufzeitproblem #1 (ungelöst): Metro-Verbindung.** App zeigt "Unable to load script." — der Emulator versucht `ws://10.0.2.2:8081` (die Emulator-Standardadresse für den Host-Rechner) zu erreichen, Metro läuft auf dem Mac nachweislich (`curl localhost:8081/status` → 200 OK), aber die Verbindung vom Emulator aus schlägt fehl. Wahrscheinlichste Ursache: macOS-Firewall blockiert eingehende Verbindungen für den (unsignierten, über IntelliJ mitgelieferten) `node`-Prozess, der Metro betreibt — kein Erlaubnis-Popup ist je erschienen, `node` fehlt in `socketfilterfw --listapps`. Da der Nutzer keine Admin-Rechte hat, war `socketfilterfw --unblockapp` (braucht `sudo`) keine Option. Alternativer Versuch: Bundle-Location im React-Native-Dev-Menü (per `adb shell input tap`/`text` bedient, da es dafür — anders als beim iOS-Simulator — kein `simctl`-Äquivalent gibt) auf `localhost:8081` umgestellt, um über den bereits funktionierenden `adb reverse tcp:8081 tcp:8081`-Tunnel zu laufen statt über die von der Firewall blockierte `10.0.2.2`-Route. Auch danach blieb der Bildschirm über eine Minute leer, ohne neuen Verbindungsversuch im Logcat — nicht abschliessend gelöst.
-    - **Laufzeitproblem #2 (ungelöst, unabhängig von #1): `LiteRTLM native init failed`** — `UnsatisfiedLinkError: dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "libLiteRTLM.so"`. Die vorkompilierte native Gemma-Bibliothek ist mit diesem Emulator-Image nicht kompatibel (vermutlich NDK/C++-Runtime-Versions-Mismatch). Wird von `LiteRTLMPackage` abgefangen ("disabling LiteRTLM for this process") — kein Absturz, aber Gemma 4 wäre auf diesem Android-Setup so oder so nicht nutzbar, unabhängig vom Metro-Problem.
-    - **Fortsetzung (gleiche Session):** Laufzeitproblem #1 (Metro-Verbindung) doch noch gelöst — die React-Native-Dev-Menu-Einstellung "Change Bundle Location" zeigt beim erneuten Öffnen immer wieder den Auto-Default (`10.0.2.2:8081`), unabhängig von einer vorherigen manuellen Eingabe; der zugrundeliegende Wert (SharedPreferences-Key `debug_http_host`, siehe `PackagerConnectionSettings.kt`/`rn_dev_preferences.xml` im RN-Source) lässt sich aber direkt und zuverlässig per `adb shell run-as com.budgetpilot sh -c '... > shared_prefs/com.budgetpilot_preferences.xml'` auf `localhost:8081` setzen (funktioniert ohne Root, da debuggable Build) — damit läuft die Verbindung sauber über den bereits eingerichteten `adb reverse tcp:8081 tcp:8081`-Tunnel statt über die von der macOS-Firewall blockierte `10.0.2.2`-Route. Bundle lädt danach zuverlässig.
-    - **Laufzeitproblem #2 (LiteRTLM) gründlich untersucht, weiterhin ungelöst:** mit der jetzt funktionierenden Metro-Verbindung zeigte sich der Folgefehler direkt in der App als roter Error-Screen: `Cannot read property 'useModel' of undefined`, verursacht durch `NitroModulesProxy.createHybridObject(...): Cannot create an instance of HybridObject "ModelStore" - It has not yet been registered` — die direkte JS-seitige Konsequenz des nativen Ladefehlers. Zwei Hypothesen systematisch getestet und beide **widerlegt**:
-      1. *API-Level des Emulators:* auf drei verschiedenen Emulatoren getestet (Pixel 10 Pro/API 37.1, Pixel 10 Pro/API 36.1, Pixel 9 Pro/API 35, Android 15) — exakt derselbe `UnsatisfiedLinkError: cannot locate symbol "__cxa_init_primary_exception"` auf allen dreien.
-      2. *Bibliotheksversion:* Upgrade von `react-native-litert-lm` 0.6.1→0.7.0 (inkl. verpflichtendem Peer-Dependency-Upgrade `react-native-nitro-modules` 0.36.5→0.37.1) — derselbe Fehler bleibt identisch bestehen. iOS läuft nach dem Upgrade weiterhin einwandfrei (verifiziert), das Upgrade wurde trotzdem behalten (aktueller, kein Nachteil). GitHub-Issues des Repos durchsucht (0 Issues insgesamt, sehr junges Projekt) — keine bestehenden Meldungen zu diesem Symbol/Fehler gefunden.
-      **Einordnung:** da der Fehler über 3 API-Level und 2 Bibliotheksversionen identisch reproduziert, handelt es sich sehr wahrscheinlich um einen echten Packaging-Bug in der vorkompilierten `libLiteRTLM.so` für Android (referenziert ein C++-Runtime-Symbol, das aktuelle Android-*Emulator*-System-Images nicht bereitstellen) — nicht um ein Konfigurationsproblem unsererseits. Ob das auch auf einem echten Gerät (Galaxy S21 FE) auftritt, ist offen; Emulator-Systembibliotheken können von echten Geräten abweichen.
-    - **Zwischenstand (in dieser Session):** Debugging zunächst hier abgebrochen — Ursache gründlich eingegrenzt (nicht API-Level, nicht Bibliotheksversion), aber ohne konkreten Fix. `minSdkVersion`-Fix und das `react-native-litert-lm`/`nitro-modules`-Upgrade committet (beide unabhängig sinnvoll, keine Regression).
-    - **Tatsächliche Ursache gefunden und behoben (spätere Fortsetzung derselben Session):** Mit `llvm-nm` (aus der Android-NDK-Toolchain) die native `.so`-Datei direkt untersucht statt weiter zu raten. Befund: `libLiteRTLM.so` referenziert `__cxa_init_primary_exception` als undefiniertes (zu importierendes) Symbol — die fertige APK enthält aber eine `libc++_shared.so` (1.3 MB), die dieses Symbol **nicht** exportiert. `react-native-litert-lm` selbst bringt in seinem eigenen `merged_native_libs`-Verzeichnis eine deutlich grössere, korrekte `libc++_shared.so` (9.2 MB, exportiert das Symbol) mit — aber beim finalen App-Build wählt Gradle (mangels expliziter `packagingOptions`) stillschweigend die falsche, kleinere Kopie von einem anderen nativen Modul, ohne Fehler oder Warnung. Klassisches "mehrere native Module bringen je ihre eigene `libc++_shared.so` mit, Gradle pickt die falsche"-Problem. **Fix (zwei Teile):**
-      1. Die korrekte `libc++_shared.so` (aus `node_modules/react-native-litert-lm/android/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a/`) nach `android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so` kopiert — App-Modul-eigene `jniLibs` gewinnen beim Merge.
-      2. In `android/app/build.gradle`: `packagingOptions { jniLibs { pickFirsts += ["**/libc++_shared.so"] } }` ergänzt, damit Gradle den Duplikat-Konflikt nicht mehr stillschweigend zugunsten der falschen Datei auflöst.
-      **Ergebnis, verifiziert:** `ModelStore`-HybridObject registriert sich jetzt erfolgreich ("Successfully registered HybridObject 'ModelStore'!"), die App zeigt den identischen Download-Screen wie auf iOS ("Lade Modell (~2.6 GB)…", Fortschrittsbalken) und lädt Gemma 4 E2B-it tatsächlich herunter. Damit ist der ursprüngliche Blocker (Gemma lädt gar nicht) behoben — zwei weitere, unabhängige Probleme kamen danach zum Vorschein, siehe Punkt 21. Vision-OCR bleibt weiterhin bewusst iOS-exklusiv (siehe Punkt 14/19, Apple-Framework).
-21. **Nach dem `libc++_shared.so`-Fix: zwei weitere, unabhängige Android-Emulator-Probleme gefunden — eines gelöst, eines nicht lösbar ohne echtes Gerät.**
-    - **RAM-Vorab-Check (gelöst):** Modell-Download lief zu 100%, danach aber `MemoryError: Refusing to load model (2468 MB): Estimated usage exceeds available memory by ~520 MB` — derselbe Sicherheitsmechanismus wie schon von iOS bekannt (Lessons Learned #5). Der Pixel-9-Pro-Emulator (`Pixel_9_Pro.avd/config.ini`, `hw.ramSize`) war mit nur 2048 MB konfiguriert. Erhöhung auf 4096 MB brachte paradoxerweise ein **grösseres** Defizit (~973 MB) — `adb shell cat /proc/meminfo` zeigte, dass Android selbst (Google-Play-Dienste etc.) schon fast die Hälfte des zugewiesenen RAMs für sich beansprucht, bevor die App überhaupt startet. Erst bei `hw.ramSize=6144` (6 GB, `MemAvailable` ~3.75 GB laut `/proc/meminfo`) reichte es. **Lehre:** bei Android-Emulatoren mit RAM-hungrigen Modellen grosszügig über dem reinen Modell-Bedarf kalkulieren — Systemoverhead (insbesondere mit Google Play Services) ist erheblich, mehr als bei einem schlanken echten Gerät zu erwarten wäre.
-    - **XNNPACK-`SIGILL`-Absturz (nicht gelöst, vermutlich Emulator-exklusiv):** direkt nach erfolgreichem RAM-Check stürzt die App nativ ab: `Fatal signal 4 (SIGILL), code 1 (ILL_ILLOPC)` in `liblitertlm_jni.so`, mitten in `Java_..._LiteRtLmJni_nativeCreateEngine`, unmittelbar nachdem im Log "Created TensorFlow Lite XNNPACK delegate for CPU" erscheint. XNNPACK (TFLites CPU-Beschleunigung) erkennt zur Laufzeit verfügbare ARM-CPU-Spezialbefehle und wählt einen entsprechend optimierten Code-Pfad — auf einer virtualisierten/emulierten CPU (Apple-Silicon-Host über QEMU/HVF) kann diese Erkennung fälschlich einen nicht wirklich unterstützten Befehlssatz annehmen, was zum Absturz führt. Systematisch alle drei Backend-Optionen der Library getestet (`backend: 'cpu' | 'gpu' | 'npu'`) — **identischer Absturz bei allen dreien**, weil laut Library-Doku (`LiteRTLM.nitro.d.ts`) der Audio-Encoder-Teil des multimodalen Modells **immer fest auf CPU/XNNPACK läuft, unabhängig vom gewählten Hauptbackend** ("Audio encoder is always set to CPU (optimal for audio processing)") — bestätigt im Log: `Backend config: main=NPU(...), vision=GPU(...), audio=CPU(...)`. Das Modell-Bundle enthält den Audio-Encoder-Teilgraphen fest eingebacken (Gemma 4 E2B-it ist Text+Vision+**Audio**), er wird beim Erstellen der Engine immer initialisiert — auch wenn die App nie `sendMessageWithAudio` aufruft. Keine Konfigurationsoption gefunden, um den Audio-Encoder wegzulassen. **Einordnung:** da alle App-seitigen Stellschrauben (drei Backends) ausgeschöpft sind und der Fehler eindeutig auf eine CPU-Feature-Fehlerkennung der virtualisierten CPU hindeutet, ist ein Test auf einem **echten Gerät** (Galaxy S21 FE, echte Hardware statt Virtualisierung) der einzig verbleibende sinnvolle nächste Schritt, um zu klären, ob das Problem überhaupt real-geräte-relevant ist oder rein emulator-spezifisch.
-22. **Bestätigt auf echtem Gerät: der `SIGILL`-Absturz war tatsächlich rein Emulator-/Virtualisierungs-spezifisch — Android läuft vollständig.** Per USB verbundenes Galaxy S21 FE (`adb devices` zeigte `model:SM_G990B2` — exakt das im Projekt dokumentierte Zielgerät), USB-Debugging aktiviert und autorisiert. Nach `npm run android` (baut/installiert automatisch auf das einzige verbundene Gerät, sobald der Emulator gestoppt ist) und demselben `adb reverse`/`debug_http_host`-Setup wie beim Emulator (Punkt 20) lud die App — **kein `SIGILL`, kein `UnsatisfiedLinkError`** — bestätigt die Vermutung aus Punkt 21: der iOS-Simulator führt Code nativ auf der echten Host-CPU aus (kein Emulator im eigentlichen Sinn), der Android-Emulator dagegen virtualisiert ein komplettes Gastsystem mit einer nachgebildeten CPU — genau dort lag die fehlerhafte XNNPACK-Fähigkeiten-Erkennung.
-    - **RAM-Vorab-Check auch hier zunächst zu konservativ:** auf einem aktiv genutzten Alltagsgerät (im Gegensatz zum sauberen Emulator) schwankt der tatsächlich freie Speicher durch laufende Hintergrund-Apps/Dienste erheblich — die Schätzung meldete trotz insgesamt reichlich RAM zunächst ein Defizit, das sich durch Schliessen von Apps nur teilweise verringern liess.
-    - **Fix (testweise):** `forceLoad: true` zur `useModel()`-Config hinzugefügt — laut Library-Doku ein rein JS-seitiger Override, der nur die Vorab-Schätzung überspringt ("the native engine ignores this field"). Ergebnis: Modell lädt vollständig und stabil, keine Abstürze — die Schätzung war zu vorsichtig. **Verifiziert:** "Modell bereit." erscheint, Freitext-Extraktion ("Miete 1200 CHF monatlich") liefert ein korrektes, vollständiges JSON-Ergebnis (`amount: 1200, category: "Wohnen", confidence: 0.95`) — kompletter End-to-End-Durchlauf auf echter Android-Hardware erfolgreich.
-    - **Nachgezogen:** `forceLoad` inzwischen auf `Platform.OS === 'android'` eingeschränkt statt pauschal für beide Plattformen — iOS' Vorab-Schätzung hat bisher nie fälschlich blockiert, daher dort die Sicherheitsprüfung nicht umgehen. Foto-Pfad auf Android (damals: Vision-OCR ist iOS-exklusiv) inzwischen per ML Kit nachgezogen, siehe Punkt 24. Weitere ABIs (nur arm64-v8a bisher mit dem `libc++_shared.so`-Fix versehen) stehen noch aus.
-23. **Dark Mode nachgerüstet:** `isDarkMode` wurde bisher nur für die StatusBar-Icons genutzt, alle Text-/Rahmenfarben waren fest auf helle Werte codiert (z.B. `#333`-Text ohne gesetzten Hintergrund) — auf dem echten Android-Gerät mit System-Dark-Mode dadurch etliche Texte (v. a. nicht ausgewählte Kategorie-Chips, "einmalig"-Segment) kaum lesbar, bestätigt per Screenshot. Fix: `styles`-StyleSheet von einer statischen Konstante auf eine `getStyles(colors)`-Fabrikfunktion umgestellt, die jede Screen-Komponente über einen neuen `useThemeColors()`-Hook (liest `useColorScheme()`) selbst aufruft — kein Prop-Drilling nötig, da `useColorScheme()` in jeder Komponente unabhängig verwendbar ist. Betrifft Hintergrund, Text-/Rahmenfarben und `TextInput`-Platzhalterfarbe (`placeholderTextColor`, per StyleSheet nicht setzbar) app-weit, plus das `theme`-Prop von `react-native-calendars` für den Kalender-Tab. Verifiziert auf dem echten Galaxy S21 FE.
-24. **Android-Foto-Vorschau blieb leer — Ursache war Androids eigene Cache-Bereinigung, nicht der Bild-Picker.** Nach Einführung des ML-Kit-OCR-Pfads (Android-Äquivalent zu Vision-OCR, siehe Punkt 14) zeigte der Entwurf-Screen auf Android ein leeres Vorschau-Kästchen, obwohl die OCR+LLM-Extraktion selbst zuverlässig korrekte Ergebnisse lieferte. Erster Fix-Versuch (Bild-Picker-URI sofort per `RNFS.copyFile` in einen dauerhaften Pfad unter `RNFS.CachesDirectoryPath` kopieren, da `react-native-image-picker` seine eigene temporäre Cache-Datei auf Android schnell aufräumt) schlug fehl — das Bild blieb weiterhin unsichtbar. **Tatsächliche Ursache, per Live-Beobachtung des Cache-Ordners (`adb shell run-as ... ls -la cache/` im 1-Sekunden-Takt) und Logcat-Auswertung gefunden:** `RNFS.CachesDirectoryPath` ist genau der App-"Cache"-Ordner, den Android selbst automatisch leert, sobald die App ihre Cache-Quota überschreitet — und Gemma 4s eigene XNNPACK-Kompilierungs-Caches (`*.xnnpack_cache`, teils über 700 MB) liegen im selben Ordner. Logcat zeigte `installd`-"Purging"-Einträge im Ein-Minuten-Takt, die älteste Cache-Dateien nach LRU entfernen, um die (im Vergleich winzige) Quota wieder einzuhalten — dabei wurde regelmässig auch die gerade erst kopierte `beleg-*.jpg` mitgelöscht, oft schon bevor der Entwurf-Screen sie anzeigen konnte. **Fix:** Zielordner von `RNFS.CachesDirectoryPath` auf `RNFS.DocumentDirectoryPath` geändert (derselbe Ordner, der im Projekt schon für PDF-Exporte verwendet wird) — dieser unterliegt nicht der automatischen Cache-Bereinigung. Rein JS-seitige Änderung, kein natives Rebuild nötig. Verifiziert auf dem echten Galaxy S21 FE: Foto bleibt jetzt dauerhaft in der Vorschau sichtbar. **Lehre:** bei "verschwindet nach kurzer Zeit"-Bugs mit App-eigenen Dateien lohnt sich ein Blick darauf, ob der gewählte Speicherort (hier: OS-verwalteter Cache-Ordner) überhaupt für den gewünschten Lebenszeitraum gedacht ist, statt nur die eigene Kopier-Logik zu verdächtigen — insbesondere wenn andere, grosse Dateien (hier: Modell-Caches) denselben Ordner mitbenutzen und die automatische Bereinigung dadurch erst richtig aktiv wird. **Nachtrag — Kehrseite des Fixes:** `DocumentDirectoryPath` wird (bewusst) NICHT automatisch vom OS bereinigt — ohne eigene Aufräum-Logik hätte sich dort bei jeder Beleg-Erfassung eine weitere Datei angesammelt, unbegrenzt. Fix: drei kombinierte Massnahmen (`listBelegFiles`/`deleteBelegFile`/`cleanupAllBelegFiles`/`cleanupOldBelegFiles` in `App.tsx`) — (a) vor jedem neuen Foto-Upload werden zuerst alle vorhandenen `beleg-*.jpg` gelöscht (`cleanupAllBelegFiles()` in `processBelegUri`, fängt auch Waisen aus abgebrochenen/verworfenen Entwürfen ab), (b) beim expliziten Bestätigen oder Verwerfen eines Entwurfs wird die zugehörige Datei sofort gelöscht (`handleBestaetigen`/`handleVerwerfen`), (c) beim App-Start werden als Sicherheitsnetz alle `beleg-*.jpg` gelöscht, die älter als 24h sind (`cleanupOldBelegFiles`, `useEffect` in `App()`) — fängt Fälle ab, in denen (a)/(b) durch einen Absturz oder Fast-Refresh-Reload übersprungen wurden. Alle Lösch-Aufrufe sind defensiv per `try/catch` abgesichert (Datei könnte schon weg sein), damit ein fehlschlagendes Aufräumen nie den eigentlichen Foto-Flow blockiert. **Verifiziert auf dem echten Galaxy S21 FE:** 6× denselben Testbeleg hochgeladen, dabei mehrfach "Verwerfen" geklickt und zwischen Tabs gewechselt (erzeugt bewusst Waisen-Dateien, da `ExpenseFlow` beim Tab-Wechsel komplett neu gemountet wird und der laufende Entwurf-State dabei verloren geht, ohne dass `handleVerwerfen` je läuft) — am Ende lag trotzdem nur die zuletzt hochgeladene Datei im Ordner, alle vorherigen (inkl. der Tab-Wechsel-Waisen) wurden korrekt entfernt.
+1. **npm Script-Genehmigung:** Neuere npm-Versionen blockieren automatisch ausgeführte "postinstall"-Skripte von Paketen
+   (Sicherheitsfeature). Lösung: Skript-Quellcode vor Freigabe geprüft (lädt nur offizielles, signiertes iOS-Framework
+   von GitHub Releases), dann gezielt freigegeben.
+2. **Multimodal-Bug (mit Gemma 3 1B-IT, inzwischen nicht mehr relevant):** `react-native-litert-lm` erkennt anhand des
+   Dateinamens ("gemma3" oder "3n" im Pfad), ob ein Modell multimodal ist, und nimmt dann automatisch ein
+   GPU-Vision-Backend an. Da unsere damalige Datei `gemma3-1b-it-int4.litertlm` hiess, das Modell aber rein textbasiert
+   war, schlug die Engine-Initialisierung zunächst fehl ("Failed to create conversation context"). Fix:
+   `multimodal: false` explizit übergeben.
+3. **Modellname beim Umstieg auf Gemma 4 E2B-it falsch geraten, dann per API korrigiert:** Die ursprüngliche Annahme war
+   die Datei heisse `gemma-4-E2B-it-litert-lm.litertlm` (das ist der Repo-Name, nicht der Dateiname). Per
+   HuggingFace-API-Abfrage der echten Repo-Dateiliste verifiziert: die korrekte Datei heisst **
+   `gemma-4-E2B-it.litertlm`** (2'588'147'712 Bytes), und `react-native-litert-lm` exportiert dafür bereits die fertige
+   Konstante `GEMMA_4_E2B_IT`. **Lehre:** bei Modell-Dateinamen nie aus dem Repo-Namen ableiten/raten, sondern die
+   Repo-Dateiliste (oder eine von der Library mitgelieferte Konstante) direkt prüfen. Ausserdem verifiziert: Repo ist
+   `gated: false` (kein Login/Lizenz-Klick nötig, anders als beim alten Gemma-3-1B-IT-Repo), und die installierte
+   `react-native-litert-lm`-Version unterstützt Gemma 4 nativ (kein Update nötig). Die Dateinamens-Heuristik für
+   `multimodal` (sucht nur "gemma3"/"3n") betrifft `gemma-4-E2B-it.litertlm` ohnehin nicht — wir setzen
+   `multimodal: true` trotzdem explizit, um uns nicht auf Zufall zu verlassen.
+4. **Modellpfad war bisher hartcodiert** (absoluter Pfad auf dem Mac) — funktionierte nur im iOS-Simulator. Mit dem
+   Umstieg auf Gemma 4 E2B-it **gelöst für dieses Modell**: `useModel(GEMMA_4_E2B_IT, …)` übergibt jetzt eine HTTPS-URL
+   statt eines lokalen Pfads, die Library lädt und cached die Datei selbst über ihre `ModelRegistry` — funktioniert
+   dadurch auch auf echten Geräten, kein manueller In-App-Download-Mechanismus mehr nötig.
+5. **RAM-Risiko real aufgetreten (Mac-Simulator):** Beim ersten echten Download+Load-Versuch schlug das Laden mit
+   `MemoryError: Refusing to load model (2468 MB): Estimated usage exceeds available memory by ~275 MB` fehl — der
+   Pre-Flight-Check der Library (dokumentiertes Sicherheitsfeature) hat das Laden aktiv verweigert, weil dem Mac zu
+   diesem Zeitpunkt zu wenig freier Speicher zur Verfügung stand. Nach Schliessen ein paar speicherhungriger Apps (freie
+   `vm_stat`-Pages von ~62 MB auf ~1.6 GB gestiegen) und komplettem Neustart der App (`simctl terminate` + `launch`) lud
+   das Modell danach sofort erfolgreich. **Lehre:** dieser Fehler zeigt sich nicht als Absturz, sondern nur als leise
+   fehlschlagender `error`-State im `useModel`-Hook — der `EntryScreen` zeigte diesen `error`-State ursprünglich gar
+   nicht an (nur der LLM-Test-Screen tat das), der Nutzer wäre bei einem endlos ladenden Screen ratlos geblieben.
+   Inzwischen behoben: `ExpenseFlow` zeigt `model.error` jetzt ebenfalls im Status-Text an. Für echte Geräte mit fixem
+   RAM-Limit (kein Freiräumen möglich wie am Mac) ist das trotzdem ein ernstzunehmendes Risiko, siehe oben.
+6. **JPEG-Qualität bei Foto-Erfassung von 0.7 auf 1.0 erhöht:** Als möglicher Beitrag zur
+   Foto-Halluzinations-Problematik — niedrigere JPEG-Qualität könnte feine Beleg-Schrift durch Kompressionsartefakte
+   zusätzlich verschlechtern. Ursprüngliche Annahme "wirkt sich nur auf `launchCamera()` aus, nicht auf
+   `launchImageLibrary()`-Uploads bereits bestehender Dateien" war vermutlich falsch: derselbe Testbeleg
+   (`test-quittung.jpg`, Coop Pratteln) lieferte mit `quality: 1.0` per Upload ein anderes Ergebnis (korrektes
+   `needs_input` statt vorher falscher Betrag mit 95% Confidence) als zuvor mit `quality: 0.7` — die Library scheint
+   auch Library-Bilder beim Export neu zu komprimieren. **Einschränkung:** nur eine Einzelbeobachtung (n=1) ohne
+   Kontrolle der resultierenden Bytegrösse, Modell-Sampling ist ausserdem nicht vollständig deterministisch — kein
+   belastbarer Beweis, aber ein Hinweis, dass sich eine spätere systematischere Untersuchung lohnen könnte.
+7. **Fast Refresh setzt einen laufenden Modell-Download zurück:** Während des ersten ~2.6-GB-Downloads führte jede noch
+   so kleine Code-Änderung in `App.tsx` (auch nur eine geänderte Konstante) zu einem von React Native automatisch
+   ausgelösten vollständigen Reload, der `useModel` neu mountete und `loadModel()` erneut von einem niedrigeren
+   Fortschritt startete (beobachtete Sprünge z. B. 26%→22%, 36%→8%). **Lehre:** während eines laufenden großen
+   Downloads/Ladevorgangs keine Code-Änderungen vornehmen — der Download läuft sonst nie durch. Falls doch nötig,
+   Fortschritt danach neu beobachten statt anzunehmen, dass er weiterläuft.
+8. **`console.log`/`console.error` landen bei diesem Setup nicht zuverlässig im Metro-Terminal oder im
+   `xcrun simctl log stream`:** Für Debugging der rohen Modell-Antworten musste stattdessen ein `Alert.alert(...)`
+   direkt in der UI verwendet werden, um Werte (z. B. `imageBuffer.byteLength`, rohe JSON-Antwort) sichtbar zu machen.
+   `console.error` erscheint immerhin im nativen System-Log (z. B. der `MemoryError` oben), `console.log` dagegen nicht.
+9. **Konversationshistorie akkumuliert über alle `generate()`-Aufrufe hinweg (wichtiger Fund):**
+   `react-native-litert-lm` hält standardmässig **eine einzige, fortlaufende Konversation** im geladenen Modell — jeder
+   `generate()`/`execute()`-Aufruf hängt sich an die Historie aller vorherigen Aufrufe an, egal aus welchem Screen. Das
+   führte zu beobachtbarer Kontext-Verschmutzung: eine PDF-Kurzzusammenfassung antwortete mit "Kopfhörer" (Rest aus dem
+   LLM-Test-Default-Prompt), und der LLM-Test-Screen lieferte nach vielen Testläufen "komische" Antworten auch auf
+   einfache Fragen. **Fix:** `model.reset()` (wrappt `resetConversation()`) wird jetzt vor jedem unabhängigen,
+   einmaligen `generate()`-Aufruf aufgerufen (LLM-Test, Freitext-Extraktion, PDF-Zusammenfassung) — das behebt beides.
+   **Wichtig für zukünftige Features:** jeder neue Ort, der `generate()`/`execute()` für eine in sich abgeschlossene
+   Anfrage nutzt, braucht vorher ein `reset()`, sonst wiederholt sich das Problem.
+10. **KI hielt sich nicht zuverlässig an JSON-Formatanweisungen, auch mit sauberem Kontext:** Der ursprüngliche
+    PDF-Zusammenfassungs-Prompt verlangte JSON (`{"short":...,"detailed":...}`), das Modell antwortete aber teils mit
+    reinem Fließtext statt JSON, obwohl der Prompt explizit "AUSSCHLIESSLICH JSON" verlangte und die Konversation frisch
+    resettet war (siehe Punkt 9) — nicht reproduzierbar, trat unregelmässig auf. **Gelöst durch Vereinfachung statt
+    Workaround:** Der Prompt verlangt inzwischen gar kein JSON mehr, sondern nur noch einen einzelnen Fliesstext-Absatz
+    (passend zum "Freundlich"-PDF-Layout, das ohnehin nur eine KI-Box statt zwei vorsieht) — dadurch entfällt das
+    Parsing-Problem komplett. Für zuverlässiges strukturiertes JSON böte sich bei Bedarf `enableStructuredOutput`/
+    `responseSchema` der Library an (constrained decoding, siehe deren README), aktuell nicht nötig.
+11. **Custom-Font-Embedding (Fraunces/Karla via `pdf-lib` + `@pdf-lib/fontkit`) scheiterte unter Hermes, obwohl in Node
+    fehlerfrei:** WOFF-Fontdateien wurden als Base64-Konstanten eingebettet; das Laden warf keinen Fehler, aber alle
+    Glyphen wurden als unleserliche Punkte/Striche gerendert. Ein identischer Test mit denselben Font-Bytes lief in
+    einem reinen Node-Skript einwandfrei — die Ursache liegt also spezifisch in der Hermes/React-Native-Laufzeit (z. B.
+    `@pdf-lib/fontkit` + `pako`-Dekompression), nicht am eigenen Base64-Decoder (byteweise gegen Node's `Buffer`
+    verifiziert, identisch). **Fix: auf pdf-lib-Standard-Fonts umgeschwenkt** (`Times-Italic` für die grossen
+    "Hero"-Zahlen, `Helvetica`/`HelveticaBold` sonst) statt weiter Zeit in die Fehlersuche zu stecken — genau der
+    Fallback, der im Auftrag für diesen Fall vorgesehen war. `@pdf-lib/fontkit` und die generierten Font-Base64-Dateien
+    wurden wieder entfernt.
+12. **`pdf-lib`s `drawSvgPath` erwartet die obere linke Ecke als Anker, nicht die untere:** Beim Bau einer eigenen
+    `drawRoundedRect()`-Hilfsfunktion (abgerundete Rechtecke gibt es in `pdf-lib` nicht nativ) wurde `y` fälschlich wie
+    bei `drawRectangle`/`drawText` als **untere** linke Ecke behandelt. Das verschiebt jede Form um ihre eigene Höhe
+    nach unten — bei unterschiedlich hohen Formen (Karte 34pt vs. Chip 16pt) fallen Chip und Karte dadurch sichtbar
+    auseinander. **Fix:** `drawRoundedRect()` nimmt weiterhin `y` = untere Ecke entgegen (konsistent zum Rest des Codes)
+    und rechnet intern selbst auf die von `drawSvgPath` erwartete obere Ecke um (`y + height`), statt dass jede
+    Aufrufstelle das selbst berücksichtigen müsste.
+13. **KI erfindet auch beim reinen Umformulieren vorgegebener Zahlen neue Werte:** Obwohl der
+    PDF-Zusammenfassungs-Prompt die korrekte Restbudget-Prozentzahl (z. B. 32.3%) explizit als feststehenden Fakt
+    vorgibt ("verwende ausschliesslich diese Zahlen"), hat das Modell im Fliesstext wiederholt einen anderen, erfundenen
+    Wert (z. B. "22%") ausgegeben. Bestätigt über mehrere Exporte hinweg reproduzierbar. Genau dafür ist die KI-Box im
+    PDF mit "KI · BITTE PRÜFEN" gekennzeichnet — bewusst keine Korrektur, da eine zuverlässige Lösung eine grössere
+    Umstellung bräuchte (z. B. Platzhalter-Vorlagen statt freier KI-Formulierung, damit die KI nur noch Ton/Stil
+    beisteuert und keine Zahlen mehr selbst wiedergibt).
+14. **Vision-Framework-OCR statt direkter Bild-Übergabe verbessert die Foto-Extraktion, löst sie aber nicht
+    vollständig:** Da Gemma 4 E2B-it bei direkter Bild-Übergabe (`sendMultimodalMessage`) 0/2 echte Kassenzettel korrekt
+    gelesen hat (siehe Risiken), wurde die Pipeline umgebaut: ein eigenes natives Swift-Modul (`ReceiptOCR`, per
+    `VNRecognizeTextRequest`) liest den Beleg-Text zuerst per Vision-Framework aus, danach läuft der erkannte Rohtext
+    über denselben, bereits bewährten Freitext-Extraktionspfad (`buildExtractionPrompt`-Familie) statt über den
+    Bild-Pfad. Technisch als Swift-Klasse + separate `.m`-Bridge-Datei umgesetzt, bewusst **ohne** Bridging-Header
+    (Resolver/Rejecter-Parameter als plain `(Any?) -> Void`/`(String?, String?, Error?) -> Void` statt der
+    React-Typalias, damit die Swift-Datei kein React importieren muss) — Standard-Pattern für Swift-Module ohne
+    bestehenden Bridging-Header. Neue Dateien mussten per `xcodeproj`-Ruby-Gem ins Xcode-Projekt eingetragen werden
+    (reines Ablegen im Dateisystem reicht nicht); dabei zunächst falsche relative Pfade gesetzt (Datei-Referenzen dieses
+    Projekts tragen den vollen `budgetpilot/…`-Pfad direkt am File-Ref statt am Gruppen-Objekt) — Build brach mit "Build
+    input file cannot be found" ab, bis die Pfade korrigiert wurden. **Ergebnis nach n=2 (nicht repräsentativ):**
+    deutliche Verbesserung gegenüber der reinen Bild-Extraktion (keine kompletten Halluzinationen wie "Kaktus" mehr),
+    aber noch nicht zuverlässig — ein einspaltiger Beleg lieferte einen plausiblen Betrag (10 statt 9.95) mit
+    konfidenter, korrekter Kategorie; ein Beleg mit mehrspaltiger Artikel-Tabelle lieferte einen komplett falschen
+    Betrag (5901 statt 37.10, vermutlich Ziffern aus zwei verschiedenen Tabellenspalten zusammengeklebt, da Vision
+    zeilenweise statt spaltenweise liest) **ohne** Low-Confidence-Warnung — das gefährliche "falsch aber
+    selbstsicher"-Muster besteht also fort, nur bei anderen Beleg-Typen. Nur iOS umgesetzt, kein Android-Äquivalent.
+15. **Explizites Thinking Mode löst die Foto-Extraktion NICHT — negativer Befund, gegen Google AI Edge Gallery
+    getestet:** Nutzer-Beobachtung: dieselben zwei Testbelege wurden in Google AI Edge Gallery (Gemma 4, "Thinking Mode"
+    dort als sichtbarer Toggle) korrekt gelesen, direkt bei uns aber nicht — Hypothese war, dass unsere Library Thinking
+    Mode nicht nutzt. Recherche ergab: `react-native-litert-lm` unterstützt `thinking` (`ExecuteOptions.thinking`/
+    `LLMConfig.thinking`, `{enabled, tokenBudget}`, Gemma 4 + LiteRT-LM 0.15+) und laut Typdefinitionen ist es bereits
+    standardmässig aktiv (`enabled: true`, `tokenBudget: -1`) — wir hatten es also vermutlich schon die ganze Zeit an,
+    nur nie explizit gesetzt. Zum sauberen Test trotzdem explizit `thinking: { enabled: true, tokenBudget: -1 }` in
+    `useModel()` gesetzt UND vorübergehend zurück auf den direkten Bild-Pfad (`sendMultimodalMessage`, wie Edge Gallery)
+    gewechselt, um 1:1 zu vergleichen. **Ergebnis bei beiden Testbelegen identisch:** 0% Confidence, "Keine
+    Lesbarkeit"/"unleserlich", alles needs_input — das Modell verweigert jetzt ehrlich die Antwort, statt (wie vorher
+    ohne explizites Thinking) einen falschen Betrag mit fälschlich hoher Confidence zu erfinden. Sicherer, aber
+    inhaltlich weiterhin nicht der Edge-Gallery-Erfolg. **Schluss:** Thinking Mode ist nicht die fehlende Zutat — der
+    Unterschied zu Edge Gallery liegt vermutlich an Bildvorverarbeitung/-auflösung, Backend (`cpu` bei uns, siehe
+    Tech-Entscheidungen) oder einer anderen Modell-Quantisierung dort, nicht ungetestet. Direkter Bild-Pfad danach
+    wieder auf die Vision-OCR-Pipeline (Punkt 14) zurückgesetzt, die für dieselben Belege bessere Ergebnisse lieferte;
+    `thinking: { enabled: true, tokenBudget: -1 }` bleibt aber explizit gesetzt (schadet nicht, hilft evtl. beim
+    Text-Extraktionsschritt der OCR-Pipeline). **Nachtest der OCR-Pipeline selbst mit explizitem Thinking (
+    byte-identischer Code zu Punkt 14, einziger Unterschied die `thinking`-Config):** beim einspaltigen Beleg (CHF 9.95)
+    diesmal eine treffendere Beschreibung ("Restaurantbesuch/Kaffee" statt "Gesamtbetrag der Ausgabe") bei gleichem
+    Betrag (10) — sah zunächst nach echter Verbesserung aus. Der mehrspaltige Beleg (CHF 37.10) widerlegt das aber:
+    Betrag weiterhin falsch (**5.901** — dieselben Ziffern wie zuvor "5901", nur mit eingefügtem Dezimalpunkt, also
+    derselbe zugrundeliegende Spalten-Verwechslungsfehler), diesmal aber mit **95% Confidence statt gar keiner
+    Warnung** — tendenziell eine Verschlechterung der Confidence-Kalibrierung, nicht des eigentlichen Lesefehlers.
+    **Einordnung:** die bessere Formulierung beim ersten Beleg ist wahrscheinlich normale Sampling-Streuung (Gemma 4
+    E2B-it sampelt nicht deterministisch), keine belastbare Verbesserung durch Thinking — n=2 pro Konfiguration ist
+    dafür ohnehin zu wenig. Für eine echte Aussage bräuchte es mehrere Wiederholungen desselben Belegs mit und ohne
+    `thinking`, um Sampling-Rauschen von einem echten Effekt zu trennen.
+16. **Klärender Test mit einem KI-generierten, sauberen Beleg (statt einem echten Foto):** ein synthetischer
+    Kassenzettel (klarer Kontrast, einfache Monospace-Schrift, einspaltiges Layout ohne Menge/Einzelpreis/Total
+    nebeneinander in einer Zeile — "KINO ARENA CINEMAS", TOTAL CHF 50.00) wurde über die Vision-OCR-Pipeline (Punkt
+    14/15) **zu 100% korrekt** extrahiert: Beschreibung "Kinoerlebnis (Kinoticket und Popcorn)", Betrag 50, Kategorie
+    "Freizeit", 100% Confidence. **Einordnung:** das grenzt die bisherigen Fehlerquellen deutlich ein — die
+    OCR+LLM-Pipeline selbst funktioniert einwandfrei bei sauberer Eingabe; die bisherigen Probleme bei den beiden echten
+    fotografierten Belegen (Coop Pratteln/Basel) liegen also konkret an (a) Foto-typischen Bildqualitätsproblemen
+    (Beleuchtung, leichte Unschärfe/Schräglage, Thermopapier-Druck) und (b) mehrspaltigen Tabellen-Layouts, die Vision
+    beim zeilenweisen statt spaltenweisen Lesen durcheinanderbringen (siehe Punkt 14) — nicht an einem grundsätzlichen
+    Defekt im OCR-first-Ansatz. Deutlich optimistischere Einordnung als "Foto-Extraktion funktioniert nicht": eher
+    "funktioniert bei sauberen/einfachen Belegen zuverlässig, kämpft noch mit echten Handy-Fotos und komplexen
+    Tabellen-Layouts".
+17. **Neuer Fehlertyp: falscher Betrag unter mehreren echten Totalen ausgewählt (Fremdwährungs-Kartenzahlung):** ein
+    dritter echter Testbeleg (Migros, viele Artikel) enthält zwei Totale — "Total CHF 150.00" (eigentlicher
+    Einkaufsbetrag) und darunter "Visa / Total in EUR 154.64" (Fremdwährungs-Umrechnung der Kartenzahlung, Dynamic
+    Currency Conversion, wie schon beim CHF-37.10-Beleg mit der "Local currency"-Zeile). Das Modell hat **154.64 EUR**
+    übernommen statt 150.00 CHF — keine Halluzination (beide Zahlen stehen wirklich auf dem Beleg, korrekt mit passender
+    Währung "EUR" ausgegeben), aber die falsche Wahl für eine Schweizer Budget-App, die überall sonst mit CHF rechnet.
+    95% Confidence, keine Warnung. **Fix:** `buildReceiptOcrExtractionPrompt()` weist das Modell jetzt explizit an, bei
+    mehreren Totalen/Währungen den CHF-Betrag zu bevorzugen (Fremdwährungs-Umrechnungszeilen wie "Total in EUR"/"Local
+    currency" zu ignorieren).
+18. **Unbegrenztes Thinking-Budget hat beim CHF-Fix-Test einen echten Fehler ausgelöst — `maxOutputTokens` deckt Denken
+    UND Antwort zusammen ab:** beim erneuten Test des Migros-Belegs (Punkt 17) nach dem Prompt-Fix schlug die Extraktion
+    mit "Keine JSON-Antwort im Modell-Output gefunden" fehl. Ursache: `maxOutputTokens` hat laut Library-Doku einen
+    Default von 1024 Tokens, der Denk- UND Antwort-Tokens gemeinsam deckelt. Mit `thinking.tokenBudget: -1` (unbegrenzt,
+    siehe Punkt 15) hat das Modell bei diesem komplexeren Beleg (viele Artikel, plus der längere Prompt aus Punkt 17)
+    sein gesamtes Output-Budget mit internem Denken aufgebraucht, bevor es je zur JSON-Antwort kam — die Antwort bricht
+    dadurch ohne schliessende `}` ab. **Fix:** `tokenBudget` von `-1` auf `512` gedeckelt und `maxOutputTokens` von
+    implizit 1024 auf explizit `2048` erhöht, damit nach dem Denken sicher noch Platz für die Antwort bleibt. **Lehre:**
+    ein unbegrenztes Denk-Budget ist ohne eine entsprechend grosszügige `maxOutputTokens`-Grenze riskant — beide Werte
+    gehören zusammen betrachtet, nicht isoliert. **Beide Fixes (Punkt 17 + 18) am selben Migros-Beleg verifiziert:**
+    danach korrekt 150 CHF (statt 154.64 EUR), Kategorie Lebensmittel, keine JSON-Fehler mehr.
+19. **Durchbruch: Vision-Observations nach Bounding-Box zu Zeilen rekonstruiert statt roher Erkennungsreihenfolge — löst
+    das eigentliche Kernproblem der Foto-Extraktion.** Mit `Alert.alert()` zum Debuggen (siehe Lessons Learned #8) den
+    rohen OCR-Text des CHF-9.95-Belegs sichtbar gemacht: Vision gibt Text NICHT in visueller Zeilen-Reihenfolge zurück,
+    sondern gruppiert offenbar nach Spalten — bei diesem zweispaltigen Beleg (Label links, Betrag rechts) kamen ALLE
+    Labels ("TOTAL CHF", "BAR", "Zurück CHF") zuerst, und die zugehörigen Zahlen ("9.95", "10.00", "-0.05") erst viel
+    später als eigene, von den Labels komplett losgelöste Gruppe. Das erklärt rückblickend alle bisherigen Fehlversuche
+    (Punkt 14, 17, mehrere Prompt-Iterationen in dieser Session) — kein Prompt-Text kann "welche Zahl gehört zu TOTAL"
+    beantworten, wenn Label und Zahl im OCR-Text gar nicht mehr benachbart sind. **Fix (`ReceiptOCR.swift`):**
+    `VNRecognizedTextObservation.boundingBox` jeder Observation genutzt, um Text mit ähnlicher vertikaler Position
+    (`midY`, Toleranz 0.015) als eine Zeile zu gruppieren (oben nach unten sortiert) und innerhalb einer Zeile nach
+    `minX` von links nach rechts zu ordnen — rekonstruiert damit z.B. "TOTAL CHF 9.95" wieder als zusammenhängende
+    Zeile, genau wie sie auf dem Beleg zu sehen ist. Zusätzlich eine deterministische Regex (`findTotalAmountInOcrText`,
+    analog zu `findDateInText` beim Freitext-Datum) ergänzt, die die erste "TOTAL &lt;Währung&gt; &lt;Betrag&gt;"-Stelle
+    im (jetzt korrekt rekonstruierten) OCR-Text findet und den vom Modell gelieferten Betrag/Währung überschreibt, statt
+    dem Modell die Auswahl unter mehreren Zahlen zu überlassen. Währungscode nach "TOTAL" bewusst zur Pflicht gemacht
+    (nicht nur `\bTOTAL\b` + nächste Zahl), weil eine erste, zu lockere Version fälschlich "Sie sparen total 2.23"
+    (Rabatt-Summe ohne Währungscode) statt "Total CHF 150.00" gematcht hat. **Ergebnis: alle drei echten Testbelege (
+    Punkt 14, 17) liefern jetzt 100% Confidence und den korrekten Betrag** (9.95 / 37.10 / 150 CHF) — inklusive des
+    vorher hartnäckigsten Falls (mehrspaltige Migros-Artikeltabelle). **Lehre:** bei OCR-Pipelines liegt der Schlüssel
+    oft in der Text-Rekonstruktion (räumliche Zuordnung von Label und Wert), nicht im nachgelagerten Prompt —
+    Prompt-Tuning kann eine strukturell verlorene Zuordnung nicht zurückholen, egal wie viele Beispiele/Anweisungen man
+    hinzufügt.
+20. **Erster Android-Build-Versuch (Emulator `Pixel_10_Pro`, API 37): `minSdkVersion`-Fix funktioniert, aber zwei
+    tiefere, noch ungelöste Probleme gefunden.** Anlass: Nutzer-Frage, ob die iOS-spezifische Vision-OCR-Lösung nicht
+    ohnehin überflüssig sei, wenn Gemma 4 + Thinking Mode reicht — Antwort: nein, siehe Punkt 15 (direkter Bild-Pfad mit
+    Thinking hat auf iOS schon versagt), aber die Frage motivierte den ersten echten Android-Testlauf.
+    - **Build-Fehler #1 (gelöst):**
+      `uses-sdk:minSdkVersion 24 cannot be smaller than version 26 declared in library [:react-native-litert-lm]` —
+      Manifest-Merge-Konflikt, da `android/build.gradle` noch `minSdkVersion 24` gesetzt hatte, `react-native-litert-lm`
+      aber API 26 verlangt. **Fix:** auf `minSdkVersion 26` erhöht (Ziel-Gerät Galaxy S21 FE läuft mit API 31, also
+      unproblematisch). Nach dem Fix baut und installiert die App erfolgreich.
+    - **Laufzeitproblem #1 (ungelöst): Metro-Verbindung.** App zeigt "Unable to load script." — der Emulator versucht
+      `ws://10.0.2.2:8081` (die Emulator-Standardadresse für den Host-Rechner) zu erreichen, Metro läuft auf dem Mac
+      nachweislich (`curl localhost:8081/status` → 200 OK), aber die Verbindung vom Emulator aus schlägt fehl.
+      Wahrscheinlichste Ursache: macOS-Firewall blockiert eingehende Verbindungen für den (unsignierten, über IntelliJ
+      mitgelieferten) `node`-Prozess, der Metro betreibt — kein Erlaubnis-Popup ist je erschienen, `node` fehlt in
+      `socketfilterfw --listapps`. Da der Nutzer keine Admin-Rechte hat, war `socketfilterfw --unblockapp` (braucht
+      `sudo`) keine Option. Alternativer Versuch: Bundle-Location im React-Native-Dev-Menü (per `adb shell input tap`/
+      `text` bedient, da es dafür — anders als beim iOS-Simulator — kein `simctl`-Äquivalent gibt) auf `localhost:8081`
+      umgestellt, um über den bereits funktionierenden `adb reverse tcp:8081 tcp:8081`-Tunnel zu laufen statt über die
+      von der Firewall blockierte `10.0.2.2`-Route. Auch danach blieb der Bildschirm über eine Minute leer, ohne neuen
+      Verbindungsversuch im Logcat — nicht abschliessend gelöst.
+    - **Laufzeitproblem #2 (ungelöst, unabhängig von #1): `LiteRTLM native init failed`** —
+      `UnsatisfiedLinkError: dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "libLiteRTLM.so"`.
+      Die vorkompilierte native Gemma-Bibliothek ist mit diesem Emulator-Image nicht kompatibel (vermutlich
+      NDK/C++-Runtime-Versions-Mismatch). Wird von `LiteRTLMPackage` abgefangen ("disabling LiteRTLM for this
+      process") — kein Absturz, aber Gemma 4 wäre auf diesem Android-Setup so oder so nicht nutzbar, unabhängig vom
+      Metro-Problem.
+    - **Fortsetzung (gleiche Session):** Laufzeitproblem #1 (Metro-Verbindung) doch noch gelöst — die
+      React-Native-Dev-Menu-Einstellung "Change Bundle Location" zeigt beim erneuten Öffnen immer wieder den
+      Auto-Default (`10.0.2.2:8081`), unabhängig von einer vorherigen manuellen Eingabe; der zugrundeliegende Wert
+      (SharedPreferences-Key `debug_http_host`, siehe `PackagerConnectionSettings.kt`/`rn_dev_preferences.xml` im
+      RN-Source) lässt sich aber direkt und zuverlässig per
+      `adb shell run-as com.budgetpilot sh -c '... > shared_prefs/com.budgetpilot_preferences.xml'` auf `localhost:8081`
+      setzen (funktioniert ohne Root, da debuggable Build) — damit läuft die Verbindung sauber über den bereits
+      eingerichteten `adb reverse tcp:8081 tcp:8081`-Tunnel statt über die von der macOS-Firewall blockierte `10.0.2.2`
+      -Route. Bundle lädt danach zuverlässig.
+    - **Laufzeitproblem #2 (LiteRTLM) gründlich untersucht, weiterhin ungelöst:** mit der jetzt funktionierenden
+      Metro-Verbindung zeigte sich der Folgefehler direkt in der App als roter Error-Screen:
+      `Cannot read property 'useModel' of undefined`, verursacht durch
+      `NitroModulesProxy.createHybridObject(...): Cannot create an instance of HybridObject "ModelStore" - It has not yet been registered` —
+      die direkte JS-seitige Konsequenz des nativen Ladefehlers. Zwei Hypothesen systematisch getestet und beide
+      **widerlegt**:
+        1. *API-Level des Emulators:* auf drei verschiedenen Emulatoren getestet (Pixel 10 Pro/API 37.1, Pixel 10
+           Pro/API 36.1, Pixel 9 Pro/API 35, Android 15) — exakt derselbe
+           `UnsatisfiedLinkError: cannot locate symbol "__cxa_init_primary_exception"` auf allen dreien.
+        2. *Bibliotheksversion:* Upgrade von `react-native-litert-lm` 0.6.1→0.7.0 (inkl. verpflichtendem
+           Peer-Dependency-Upgrade `react-native-nitro-modules` 0.36.5→0.37.1) — derselbe Fehler bleibt identisch
+           bestehen. iOS läuft nach dem Upgrade weiterhin einwandfrei (verifiziert), das Upgrade wurde trotzdem behalten
+           (aktueller, kein Nachteil). GitHub-Issues des Repos durchsucht (0 Issues insgesamt, sehr junges Projekt) —
+           keine bestehenden Meldungen zu diesem Symbol/Fehler gefunden. **Einordnung:** da der Fehler über 3 API-Level
+           und 2 Bibliotheksversionen identisch reproduziert, handelt es sich sehr wahrscheinlich um einen echten
+           Packaging-Bug in der vorkompilierten `libLiteRTLM.so` für Android (referenziert ein C++-Runtime-Symbol, das
+           aktuelle Android- *Emulator*-System-Images nicht bereitstellen) — nicht um ein Konfigurationsproblem
+           unsererseits. Ob das auch auf einem echten Gerät (Galaxy S21 FE) auftritt, ist offen;
+           Emulator-Systembibliotheken können von echten Geräten abweichen.
+    - **Zwischenstand (in dieser Session):** Debugging zunächst hier abgebrochen — Ursache gründlich eingegrenzt (nicht
+      API-Level, nicht Bibliotheksversion), aber ohne konkreten Fix. `minSdkVersion`-Fix und das
+      `react-native-litert-lm`/`nitro-modules`-Upgrade committet (beide unabhängig sinnvoll, keine Regression).
+    - **Tatsächliche Ursache gefunden und behoben (spätere Fortsetzung derselben Session):** Mit `llvm-nm` (aus der
+      Android-NDK-Toolchain) die native `.so`-Datei direkt untersucht statt weiter zu raten. Befund: `libLiteRTLM.so`
+      referenziert `__cxa_init_primary_exception` als undefiniertes (zu importierendes) Symbol — die fertige APK enthält
+      aber eine `libc++_shared.so` (1.3 MB), die dieses Symbol **nicht** exportiert. `react-native-litert-lm` selbst
+      bringt in seinem eigenen `merged_native_libs`-Verzeichnis eine deutlich grössere, korrekte `libc++_shared.so` (9.2
+      MB, exportiert das Symbol) mit — aber beim finalen App-Build wählt Gradle (mangels expliziter `packagingOptions`)
+      stillschweigend die falsche, kleinere Kopie von einem anderen nativen Modul, ohne Fehler oder Warnung. Klassisches
+      "mehrere native Module bringen je ihre eigene `libc++_shared.so` mit, Gradle pickt die falsche"-Problem. **Fix (
+      zwei Teile):**
+        1. Die korrekte `libc++_shared.so` (aus
+           `node_modules/react-native-litert-lm/android/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a/`)
+           nach `android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so` kopiert — App-Modul-eigene `jniLibs` gewinnen
+           beim Merge.
+        2. In `android/app/build.gradle`: `packagingOptions { jniLibs { pickFirsts += ["**/libc++_shared.so"] } }`
+           ergänzt, damit Gradle den Duplikat-Konflikt nicht mehr stillschweigend zugunsten der falschen Datei auflöst.
+           **Ergebnis, verifiziert:** `ModelStore`-HybridObject registriert sich jetzt erfolgreich ("Successfully
+           registered HybridObject 'ModelStore'!"), die App zeigt den identischen Download-Screen wie auf iOS ("Lade
+           Modell (~2.6 GB)…", Fortschrittsbalken) und lädt Gemma 4 E2B-it tatsächlich herunter. Damit ist der
+           ursprüngliche Blocker (Gemma lädt gar nicht) behoben — zwei weitere, unabhängige Probleme kamen danach zum
+           Vorschein, siehe Punkt 21. Vision-OCR bleibt weiterhin bewusst iOS-exklusiv (siehe Punkt 14/19,
+           Apple-Framework).
+21. **Nach dem `libc++_shared.so`-Fix: zwei weitere, unabhängige Android-Emulator-Probleme gefunden — eines gelöst,
+    eines nicht lösbar ohne echtes Gerät.**
+    - **RAM-Vorab-Check (gelöst):** Modell-Download lief zu 100%, danach aber
+      `MemoryError: Refusing to load model (2468 MB): Estimated usage exceeds available memory by ~520 MB` — derselbe
+      Sicherheitsmechanismus wie schon von iOS bekannt (Lessons Learned #5). Der Pixel-9-Pro-Emulator
+      (`Pixel_9_Pro.avd/config.ini`, `hw.ramSize`) war mit nur 2048 MB konfiguriert. Erhöhung auf 4096 MB brachte
+      paradoxerweise ein **grösseres** Defizit (~973 MB) — `adb shell cat /proc/meminfo` zeigte, dass Android selbst
+      (Google-Play-Dienste etc.) schon fast die Hälfte des zugewiesenen RAMs für sich beansprucht, bevor die App
+      überhaupt startet. Erst bei `hw.ramSize=6144` (6 GB, `MemAvailable` ~3.75 GB laut `/proc/meminfo`) reichte es.
+      **Lehre:** bei Android-Emulatoren mit RAM-hungrigen Modellen grosszügig über dem reinen Modell-Bedarf
+      kalkulieren — Systemoverhead (insbesondere mit Google Play Services) ist erheblich, mehr als bei einem schlanken
+      echten Gerät zu erwarten wäre.
+    - **XNNPACK-`SIGILL`-Absturz (nicht gelöst, vermutlich Emulator-exklusiv):** direkt nach erfolgreichem RAM-Check
+      stürzt die App nativ ab: `Fatal signal 4 (SIGILL), code 1 (ILL_ILLOPC)` in `liblitertlm_jni.so`, mitten in
+      `Java_..._LiteRtLmJni_nativeCreateEngine`, unmittelbar nachdem im Log "Created TensorFlow Lite XNNPACK delegate
+      for CPU" erscheint. XNNPACK (TFLites CPU-Beschleunigung) erkennt zur Laufzeit verfügbare ARM-CPU-Spezialbefehle
+      und wählt einen entsprechend optimierten Code-Pfad — auf einer virtualisierten/emulierten CPU (Apple-Silicon-Host
+      über QEMU/HVF) kann diese Erkennung fälschlich einen nicht wirklich unterstützten Befehlssatz annehmen, was zum
+      Absturz führt. Systematisch alle drei Backend-Optionen der Library getestet (`backend: 'cpu' | 'gpu' | 'npu'`) —
+      **identischer Absturz bei allen dreien**, weil laut Library-Doku (`LiteRTLM.nitro.d.ts`) der Audio-Encoder-Teil
+      des multimodalen Modells **immer fest auf CPU/XNNPACK läuft, unabhängig vom gewählten Hauptbackend** ("Audio
+      encoder is always set to CPU (optimal for audio processing)") — bestätigt im Log:
+      `Backend config: main=NPU(...), vision=GPU(...), audio=CPU(...)`. Das Modell-Bundle enthält den
+      Audio-Encoder-Teilgraphen fest eingebacken (Gemma 4 E2B-it ist Text+Vision+ **Audio**), er wird beim Erstellen der
+      Engine immer initialisiert — auch wenn die App nie `sendMessageWithAudio` aufruft. Keine Konfigurationsoption
+      gefunden, um den Audio-Encoder wegzulassen. **Einordnung:** da alle App-seitigen Stellschrauben (drei Backends)
+      ausgeschöpft sind und der Fehler eindeutig auf eine CPU-Feature-Fehlerkennung der virtualisierten CPU hindeutet,
+      ist ein Test auf einem **echten Gerät** (Galaxy S21 FE, echte Hardware statt Virtualisierung) der einzig
+      verbleibende sinnvolle nächste Schritt, um zu klären, ob das Problem überhaupt real-geräte-relevant ist oder rein
+      emulator-spezifisch.
+22. **Bestätigt auf echtem Gerät: der `SIGILL`-Absturz war tatsächlich rein Emulator-/Virtualisierungs-spezifisch —
+    Android läuft vollständig.** Per USB verbundenes Galaxy S21 FE (`adb devices` zeigte `model:SM_G990B2` — exakt das
+    im Projekt dokumentierte Zielgerät), USB-Debugging aktiviert und autorisiert. Nach `npm run android`
+    (baut/installiert automatisch auf das einzige verbundene Gerät, sobald der Emulator gestoppt ist) und demselben
+    `adb reverse`/`debug_http_host`-Setup wie beim Emulator (Punkt 20) lud die App — **kein `SIGILL`, kein
+    `UnsatisfiedLinkError`** — bestätigt die Vermutung aus Punkt 21: der iOS-Simulator führt Code nativ auf der echten
+    Host-CPU aus (kein Emulator im eigentlichen Sinn), der Android-Emulator dagegen virtualisiert ein komplettes
+    Gastsystem mit einer nachgebildeten CPU — genau dort lag die fehlerhafte XNNPACK-Fähigkeiten-Erkennung.
+    - **RAM-Vorab-Check auch hier zunächst zu konservativ:** auf einem aktiv genutzten Alltagsgerät (im Gegensatz zum
+      sauberen Emulator) schwankt der tatsächlich freie Speicher durch laufende Hintergrund-Apps/Dienste erheblich — die
+      Schätzung meldete trotz insgesamt reichlich RAM zunächst ein Defizit, das sich durch Schliessen von Apps nur
+      teilweise verringern liess.
+    - **Fix (testweise):** `forceLoad: true` zur `useModel()`-Config hinzugefügt — laut Library-Doku ein rein
+      JS-seitiger Override, der nur die Vorab-Schätzung überspringt ("the native engine ignores this field"). Ergebnis:
+      Modell lädt vollständig und stabil, keine Abstürze — die Schätzung war zu vorsichtig. **Verifiziert:** "Modell
+      bereit." erscheint, Freitext-Extraktion ("Miete 1200 CHF monatlich") liefert ein korrektes, vollständiges
+      JSON-Ergebnis (`amount: 1200, category: "Wohnen", confidence: 0.95`) — kompletter End-to-End-Durchlauf auf echter
+      Android-Hardware erfolgreich.
+    - **Nachgezogen:** `forceLoad` inzwischen auf `Platform.OS === 'android'` eingeschränkt statt pauschal für beide
+      Plattformen — iOS' Vorab-Schätzung hat bisher nie fälschlich blockiert, daher dort die Sicherheitsprüfung nicht
+      umgehen. Foto-Pfad auf Android (damals: Vision-OCR ist iOS-exklusiv) inzwischen per ML Kit nachgezogen, siehe
+      Punkt 24. Weitere ABIs (nur arm64-v8a bisher mit dem `libc++_shared.so`-Fix versehen) stehen noch aus.
+23. **Dark Mode nachgerüstet:** `isDarkMode` wurde bisher nur für die StatusBar-Icons genutzt, alle Text-/Rahmenfarben
+    waren fest auf helle Werte codiert (z.B. `#333`-Text ohne gesetzten Hintergrund) — auf dem echten Android-Gerät mit
+    System-Dark-Mode dadurch etliche Texte (v. a. nicht ausgewählte Kategorie-Chips, "einmalig"-Segment) kaum lesbar,
+    bestätigt per Screenshot. Fix: `styles`-StyleSheet von einer statischen Konstante auf eine `getStyles(colors)`
+    -Fabrikfunktion umgestellt, die jede Screen-Komponente über einen neuen `useThemeColors()`-Hook (liest
+    `useColorScheme()`) selbst aufruft — kein Prop-Drilling nötig, da `useColorScheme()` in jeder Komponente unabhängig
+    verwendbar ist. Betrifft Hintergrund, Text-/Rahmenfarben und `TextInput`-Platzhalterfarbe (`placeholderTextColor`,
+    per StyleSheet nicht setzbar) app-weit, plus das `theme`-Prop von `react-native-calendars` für den Kalender-Tab.
+    Verifiziert auf dem echten Galaxy S21 FE.
+24. **Android-Foto-Vorschau blieb leer — Ursache war Androids eigene Cache-Bereinigung, nicht der Bild-Picker.** Nach
+    Einführung des ML-Kit-OCR-Pfads (Android-Äquivalent zu Vision-OCR, siehe Punkt 14) zeigte der Entwurf-Screen auf
+    Android ein leeres Vorschau-Kästchen, obwohl die OCR+LLM-Extraktion selbst zuverlässig korrekte Ergebnisse lieferte.
+    Erster Fix-Versuch (Bild-Picker-URI sofort per `RNFS.copyFile` in einen dauerhaften Pfad unter
+    `RNFS.CachesDirectoryPath` kopieren, da `react-native-image-picker` seine eigene temporäre Cache-Datei auf Android
+    schnell aufräumt) schlug fehl — das Bild blieb weiterhin unsichtbar. **Tatsächliche Ursache, per Live-Beobachtung
+    des Cache-Ordners (`adb shell run-as ... ls -la cache/` im 1-Sekunden-Takt) und Logcat-Auswertung gefunden:**
+    `RNFS.CachesDirectoryPath` ist genau der App-"Cache"-Ordner, den Android selbst automatisch leert, sobald die App
+    ihre Cache-Quota überschreitet — und Gemma 4s eigene XNNPACK-Kompilierungs-Caches (`*.xnnpack_cache`, teils über 700
+    MB) liegen im selben Ordner. Logcat zeigte `installd`-"Purging"-Einträge im Ein-Minuten-Takt, die älteste
+    Cache-Dateien nach LRU entfernen, um die (im Vergleich winzige) Quota wieder einzuhalten — dabei wurde regelmässig
+    auch die gerade erst kopierte `beleg-*.jpg` mitgelöscht, oft schon bevor der Entwurf-Screen sie anzeigen konnte.
+    **Fix:** Zielordner von `RNFS.CachesDirectoryPath` auf `RNFS.DocumentDirectoryPath` geändert (derselbe Ordner, der
+    im Projekt schon für PDF-Exporte verwendet wird) — dieser unterliegt nicht der automatischen Cache-Bereinigung. Rein
+    JS-seitige Änderung, kein natives Rebuild nötig. Verifiziert auf dem echten Galaxy S21 FE: Foto bleibt jetzt
+    dauerhaft in der Vorschau sichtbar. **Lehre:** bei "verschwindet nach kurzer Zeit"-Bugs mit App-eigenen Dateien
+    lohnt sich ein Blick darauf, ob der gewählte Speicherort (hier: OS-verwalteter Cache-Ordner) überhaupt für den
+    gewünschten Lebenszeitraum gedacht ist, statt nur die eigene Kopier-Logik zu verdächtigen — insbesondere wenn
+    andere, grosse Dateien (hier: Modell-Caches) denselben Ordner mitbenutzen und die automatische Bereinigung dadurch
+    erst richtig aktiv wird. **Nachtrag — Kehrseite des Fixes:** `DocumentDirectoryPath` wird (bewusst) NICHT
+    automatisch vom OS bereinigt — ohne eigene Aufräum-Logik hätte sich dort bei jeder Beleg-Erfassung eine weitere
+    Datei angesammelt, unbegrenzt. Fix: drei kombinierte Massnahmen (`listBelegFiles`/`deleteBelegFile`/
+    `cleanupAllBelegFiles`/`cleanupOldBelegFiles` in `App.tsx`) — (a) vor jedem neuen Foto-Upload werden zuerst alle
+    vorhandenen `beleg-*.jpg` gelöscht (`cleanupAllBelegFiles()` in `processBelegUri`, fängt auch Waisen aus
+    abgebrochenen/verworfenen Entwürfen ab), (b) beim expliziten Bestätigen oder Verwerfen eines Entwurfs wird die
+    zugehörige Datei sofort gelöscht (`handleBestaetigen`/`handleVerwerfen`), (c) beim App-Start werden als
+    Sicherheitsnetz alle `beleg-*.jpg` gelöscht, die älter als 24h sind (`cleanupOldBelegFiles`, `useEffect` in
+    `App()`) — fängt Fälle ab, in denen (a)/ (b) durch einen Absturz oder Fast-Refresh-Reload übersprungen wurden. Alle
+    Lösch-Aufrufe sind defensiv per `try/catch` abgesichert (Datei könnte schon weg sein), damit ein fehlschlagendes
+    Aufräumen nie den eigentlichen Foto-Flow blockiert. **Verifiziert auf dem echten Galaxy S21 FE:** 6× denselben
+    Testbeleg hochgeladen, dabei mehrfach "Verwerfen" geklickt und zwischen Tabs gewechselt (erzeugt bewusst
+    Waisen-Dateien, da `ExpenseFlow` beim Tab-Wechsel komplett neu gemountet wird und der laufende Entwurf-State dabei
+    verloren geht, ohne dass `handleVerwerfen` je läuft) — am Ende lag trotzdem nur die zuletzt hochgeladene Datei im
+    Ordner, alle vorherigen (inkl. der Tab-Wechsel-Waisen) wurden korrekt entfernt.
 
-25. **op-sqlites Node-Fassade ist in 18.1.4 defekt — Tests laufen trotzdem ohne Simulator:** op-sqlite bewirbt eine Node.js-Fassade (`node/dist/`), mit der man Queries in Jest testen können soll. Sie ist unbenutzbar: `node/dist/index.js` importiert `"./database"` ohne `.js`-Endung, was Node im ESM-Modus mit `ERR_MODULE_NOT_FOUND` ablehnt (die Datei existiert, nur der Import ist falsch). Das native Modul selbst lässt sich in Jest ohnehin nicht laden. **Lösung ohne Workaround an der Library:** Repository und Migrationen sprechen nicht op-sqlite direkt, sondern einen schmalen Port mit genau zwei Methoden (`execute`, `transaction`, siehe `src/db/sql.ts`). In der App wird op-sqlites `DB` übergeben (erfüllt den Port strukturell — von `tsc` bestätigt, kein Cast nötig), in den Tests ein 20-Zeilen-Adapter auf Nodes eingebautes `node:sqlite` (ab Node 22, im Projekt via `engines` ohnehin vorausgesetzt). Getestet wird damit echtes SQLite mit echtem SQL, inklusive CHECK-Constraints, `ON DELETE CASCADE` und Transaktions-Rollback. Nebeneffekt: die Datenschicht ist an einer Stelle austauschbar, falls op-sqlite je zum Problem wird.
-26. **Ein neues natives Modul braucht `pod install` + vollen Rebuild — Metro-Reload reicht nicht, und der Fehler führt in die Irre:** Nach `npm install @op-engineering/op-sqlite` lief Metro den neuen JS-Code sofort aus, das installierte Binary kannte das Modul aber nicht. Ergebnis: `TypeError: Cannot read property 'open' of undefined` — op-sqlites JSI-Proxy (`global.__OPSQLiteProxy`) wird vom nativen Teil installiert, fehlt der, ist das Modulobjekt `undefined`. Die Meldung nennt weder op-sqlite noch den fehlenden Pod. Nötig ist `bundle exec pod install` (`pod` liegt bei uns nicht im PATH, nur als Gem) und danach ein kompletter `npx react-native run-ios`. **Gleiche Falle wie bei litert-lm:** eine irreführende Fehlermeldung, deren Ursache eine fehlende native Integration ist.
-27. **`PRAGMA foreign_keys = ON` gilt pro Verbindung, nicht pro Datenbank:** SQLite hat Fremdschlüssel aus Kompatibilitätsgründen standardmässig aus. Ohne das Pragma in `initDatabase()` würde `ON DELETE CASCADE` im Schema stillschweigend nichts tun — kein Fehler, nur verwaiste Zeilen. Der Test-Adapter setzt dasselbe Pragma, sonst würde der CASCADE-Test grün sein, obwohl das Verhalten in der App fehlt.
-28. **Ein Commit hat die halbe DB-Schicht auf `main` zurückgelassen — `main` war dadurch nicht kompilierbar:** Der Commit `f059b4a "added database"` brachte `src/db/{schema,sql,repository,mapping,index}.ts` samt Tests, aber **nicht** `src/db/types.ts` — die Datei lag noch in einem `git stash` und wurde beim Committen übersehen, obwohl vier der committeten Dateien sie importieren. Folge: 7 `TS2307`-Fehler, `db.test.ts` scheiterte schon beim Modul-Auflösen (0 Tests liefen), und die op-sqlite-Dependency fehlte ebenfalls in `package.json`. Nichts davon fiel auf, weil auf `main` weder `tsc --noEmit` noch `jest` vor dem Push liefen. **Lehre:** wenn Teile einer Änderung im Stash liegen, prüft `git stash list` vor dem Commit — und ein `npx tsc --noEmit && npx jest` vor dem Push hätte den Fehler in unter zwei Sekunden gezeigt. Nachgezogen: `types.ts` aus dem Stash wiederhergestellt, op-sqlite installiert, App.tsx-Anbindung und Preise-Tab aus demselben Stash auf den aktuellen `main`-Stand portiert (der Stash basierte auf `0c2ec82`, drei Merges zurück, weshalb `git stash pop` nicht in Frage kam — die Hunks wurden von Hand übertragen und die Styles auf die inzwischen eingeführte `getStyles(colors)`-Dark-Mode-Fabrik umgeschrieben).
+25. **op-sqlites Node-Fassade ist in 18.1.4 defekt — Tests laufen trotzdem ohne Simulator:** op-sqlite bewirbt eine
+    Node.js-Fassade (`node/dist/`), mit der man Queries in Jest testen können soll. Sie ist unbenutzbar:
+    `node/dist/index.js` importiert `"./database"` ohne `.js`-Endung, was Node im ESM-Modus mit `ERR_MODULE_NOT_FOUND`
+    ablehnt (die Datei existiert, nur der Import ist falsch). Das native Modul selbst lässt sich in Jest ohnehin nicht
+    laden. **Lösung ohne Workaround an der Library:** Repository und Migrationen sprechen nicht op-sqlite direkt,
+    sondern einen schmalen Port mit genau zwei Methoden (`execute`, `transaction`, siehe `src/db/sql.ts`). In der App
+    wird op-sqlites `DB` übergeben (erfüllt den Port strukturell — von `tsc` bestätigt, kein Cast nötig), in den Tests
+    ein 20-Zeilen-Adapter auf Nodes eingebautes `node:sqlite` (ab Node 22, im Projekt via `engines` ohnehin
+    vorausgesetzt). Getestet wird damit echtes SQLite mit echtem SQL, inklusive CHECK-Constraints, `ON DELETE CASCADE`
+    und Transaktions-Rollback. Nebeneffekt: die Datenschicht ist an einer Stelle austauschbar, falls op-sqlite je zum
+    Problem wird.
+26. **Ein neues natives Modul braucht `pod install` + vollen Rebuild — Metro-Reload reicht nicht, und der Fehler führt
+    in die Irre:** Nach `npm install @op-engineering/op-sqlite` lief Metro den neuen JS-Code sofort aus, das
+    installierte Binary kannte das Modul aber nicht. Ergebnis: `TypeError: Cannot read property 'open' of undefined` —
+    op-sqlites JSI-Proxy (`global.__OPSQLiteProxy`) wird vom nativen Teil installiert, fehlt der, ist das Modulobjekt
+    `undefined`. Die Meldung nennt weder op-sqlite noch den fehlenden Pod. Nötig ist `bundle exec pod install` (`pod`
+    liegt bei uns nicht im PATH, nur als Gem) und danach ein kompletter `npx react-native run-ios`. **Gleiche Falle wie
+    bei litert-lm:** eine irreführende Fehlermeldung, deren Ursache eine fehlende native Integration ist.
+27. **`PRAGMA foreign_keys = ON` gilt pro Verbindung, nicht pro Datenbank:** SQLite hat Fremdschlüssel aus
+    Kompatibilitätsgründen standardmässig aus. Ohne das Pragma in `initDatabase()` würde `ON DELETE CASCADE` im Schema
+    stillschweigend nichts tun — kein Fehler, nur verwaiste Zeilen. Der Test-Adapter setzt dasselbe Pragma, sonst würde
+    der CASCADE-Test grün sein, obwohl das Verhalten in der App fehlt.
+28. **Ein Commit hat die halbe DB-Schicht auf `main` zurückgelassen — `main` war dadurch nicht kompilierbar:** Der
+    Commit `f059b4a "added database"` brachte `src/db/{schema,sql,repository,mapping,index}.ts` samt Tests, aber
+    **nicht** `src/db/types.ts` — die Datei lag noch in einem `git stash` und wurde beim Committen übersehen, obwohl
+    vier der committeten Dateien sie importieren. Folge: 7 `TS2307`-Fehler, `db.test.ts` scheiterte schon beim
+    Modul-Auflösen (0 Tests liefen), und die op-sqlite-Dependency fehlte ebenfalls in `package.json`. Nichts davon fiel
+    auf, weil auf `main` weder `tsc --noEmit` noch `jest` vor dem Push liefen. **Lehre:** wenn Teile einer Änderung im
+    Stash liegen, prüft `git stash list` vor dem Commit — und ein `npx tsc --noEmit && npx jest` vor dem Push hätte den
+    Fehler in unter zwei Sekunden gezeigt. Nachgezogen: `types.ts` aus dem Stash wiederhergestellt, op-sqlite
+    installiert, App.tsx-Anbindung und Preise-Tab aus demselben Stash auf den aktuellen `main`-Stand portiert (der Stash
+    basierte auf `0c2ec82`, drei Merges zurück, weshalb `git stash pop` nicht in Frage kam — die Hunks wurden von Hand
+    übertragen und die Styles auf die inzwischen eingeführte `getStyles(colors)`-Dark-Mode-Fabrik umgeschrieben).
 
-29. **Kalender-Tag-Detail:** Antippen eines Kalendertags mit Punkt-Markierung öffnete "Ausgabe erfassen" mit vorausgefülltem Datum, zeigte aber nicht, was an diesem Tag schon erfasst wurde — man musste dafür extra in den Budget-Tab wechseln und dort suchen. Fix: `ExpenseFlow` bekommt jetzt die volle `items`-Liste (aus dem DB-Persistenz-State in `App()`) und filtert sie nach `prefilledDate`; `EntryScreen` zeigt das Ergebnis als kompakte Liste ("Bereits erfasst für TT.MM.JJJJ:") direkt unter dem Freitext-Feld, mit Betrag, Kategorie und Fixkosten/Einmalig (aus `cadence` abgeleitet) — dieselbe Darstellung wie im Budget-Tab, nur nach Datum statt nach Häufigkeit gruppiert. Reiner JS-State-Filter (`useMemo`), keine neue DB-Query nötig, da `items` ohnehin schon vollständig geladen im State liegt. Verifiziert im iOS-Simulator.
+29. **Kalender-Tag-Detail:** Antippen eines Kalendertags mit Punkt-Markierung öffnete "Ausgabe erfassen" mit
+    vorausgefülltem Datum, zeigte aber nicht, was an diesem Tag schon erfasst wurde — man musste dafür extra in den
+    Budget-Tab wechseln und dort suchen. Fix: `ExpenseFlow` bekommt jetzt die volle `items`-Liste (aus dem
+    DB-Persistenz-State in `App()`) und filtert sie nach `prefilledDate`; `EntryScreen` zeigt das Ergebnis als kompakte
+    Liste ("Bereits erfasst für TT.MM.JJJJ:") direkt unter dem Freitext-Feld, mit Betrag, Kategorie und
+    Fixkosten/Einmalig (aus `cadence` abgeleitet) — dieselbe Darstellung wie im Budget-Tab, nur nach Datum statt nach
+    Häufigkeit gruppiert. Reiner JS-State-Filter (`useMemo`), keine neue DB-Query nötig, da `items` ohnehin schon
+    vollständig geladen im State liegt. Verifiziert im iOS-Simulator.
 
-30. **Erstes Golden Set (n=20) + automatisierter Batch-Runner — 90% komplett korrekt, alle Zielwerte übertroffen.** Bisher gab es für die Freitext-Extraktion nur Einzel-Stichproben statt einer systematischen Messung. Umgesetzt: `src/goldenSet.ts` (20 Fälle, alle 7 Kategorien abgedeckt, `{input, expected: {amount, currency, cadence, category}}`) plus eine reine, unabhängig getestete Vergleichsfunktion `compareToExpected()` (`src/__tests__/goldenSet.test.ts`, 7 Fälle). Da das Modell nur on-device läuft (Jest kann `NitroModules` nicht laden, siehe App.test.tsx-Einschränkung), läuft die eigentliche Messung nicht in Jest, sondern über einen neuen Batch-Runner im LLM-Test-Screen: ein Button führt alle 20 Fälle nacheinander durch denselben `buildExtractionPrompt()`-Pfad wie die echte Freitext-Extraktion (inkl. `reset()` vor jedem Fall, siehe Lessons Learned #9), vergleicht das Ergebnis gegen `expected` und zeigt eine Zusammenfassung plus Pro-Fall-Liste (✅/❌ mit erwarteten vs. erhaltenen Werten). Jeder Fall läuft in einem eigenen `try/catch`, damit ein einzelner Parse-Fehler nicht den ganzen Durchlauf abbricht. **Ergebnis (iOS-Simulator, ein Durchlauf):** Betrag 20/20 (100%), Häufigkeit 20/20 (100%), Kategorie 18/20 (90%), komplett korrekt 18/20 (90%) — übertrifft die Erfolgskriterien-Zielwerte (85%/80%). Die zwei Kategorie-"Fehler" sind beide harmlos: "Hausratversicherung" wurde als "Sonstiges" statt "Wohnen" eingeordnet (vertretbare Alternativ-Kategorisierung), "Spende" bekam ehrlich `needs_input` statt geraten "Sonstiges" — keine gefährliche Fehlklassifikation mit falscher hoher Confidence. **Bewusste Einschränkungen dieser ersten Version:** nur 20 statt der im Testplan vorgesehenen 30 Fälle (Laufzeit-Grund — jeder Fall braucht einen echten CPU-Modellaufruf, ein 50er-Set hätte für einen ersten Durchlauf zu lange gedauert), und bewusst keine mehrdeutigen/needs_input-Fälle in den Erwartungswerten (lässt sich später ergänzen). Die Liste ist beliebig erweiterbar, ohne den Runner anzufassen. **Update: auf die vollen 30 Fälle erweitert (10 zusätzliche, bewusst mit anderen Formulierungsmustern — andere Wortstellung/Verben, CHF/EUR-Mix statt nur CHF).** Zweiter Durchlauf (iOS-Simulator): Betrag 30/30 (100%), Häufigkeit 30/30 (100%), Kategorie 27/30 (90%), komplett korrekt 27/30 (90%) — praktisch identische Quote wie beim 20er-Lauf, skaliert also stabil. Alle drei Kategorie-"Fehler" drehen sich um dieselbe Kategorie: "Sonstiges" ist offensichtlich die unschärfste Grenze im Set, nicht zufälliges Rauschen — "Hausratversicherung" (erwartet Wohnen) und "Neue Winterjacke" (erwartet Sonstiges, Modell sagt Freizeit) sind beides vertretbare Alternativ-Kategorisierungen, "Spende" bekommt wie beim ersten Lauf ehrlich `needs_input` statt geraten. EUR-Fall ("Zugticket ... 59 EUR") korrekt erkannt, keine Auffälligkeit bei der Währung. **Update: Latenz-Messung ergänzt.** Bisher gab es dafür nur ein Gefühl ("dauert teils über eine Minute auf CPU"), keine echte Zahl. Jeder Golden-Set-Fall stoppt jetzt die Zeit von `reset()` bis zur fertigen `generate()`-Antwort (`Date.now()` vor/nach, auch bei einem fehlgeschlagenen Fall gemessen — der Modellaufruf lief ja trotzdem), die Zusammenfassung zeigt Durchschnitt/Min/Max, jeder Einzelfall seine eigene Zeit. **Ergebnis (iOS-Simulator, n=30):** Ø 14.1s, min 11.7s, max 15.3s — deutlich schneller und gleichmässiger als das bisherige Gefühl, das vermutlich vom langsameren Android-Testgerät geprägt war (siehe Lessons Learned #22). **Update: dieselbe Messung auf echter Android-Hardware (Galaxy S21 FE) nachgeholt** (brauchte vorher einen Rebuild mit Gradle 9.5.0, siehe eigener Fix, sowie freien Gerätespeicher — die APK allein ist 215 MB). **Ergebnis:** 27/30 (90%) komplett korrekt — identische Quote und dieselben drei Kategorie-Fehler wie im Simulator-Lauf, die Extraktions-Qualität ist also geräteunabhängig stabil. Latenz dagegen deutlich anders: Ø 103.7s, min 54.4s, max 427.3s — rund 7× langsamer im Schnitt als der iOS-Simulator (Mac-CPU vs. mobiler SoC, erwartbar), aber auch mit riesiger Streuung. Der 427.3s-Ausreisser ("Stromrechnung, jeden Monat 85 CHF") war inhaltlich kein schwierigerer Fall als seine Nachbarn (66–183s) — das Handy war während des Laufs kurz dunkel/im Ruhemodus. **Lehre:** wenn der Bildschirm während einer On-Device-Inferenz auf Android kurz dunkel wird bzw. das Gerät in den Ruhemodus geht, kann das die Verarbeitung erheblich verlangsamen (Android drosselt Hintergrundaktivität) — bei Latenz-Messungen den Screen aktiv halten, sonst verfälscht das die Zahlen. Für den POC-Bericht heisst das: die 103.7s-Durchschnitt inkl. Ausreisser ist ein realistisches "Screen wurde kurz dunkel"-Szenario, kein bereinigter Normalwert — ohne den 427s-Ausreisser läge der Durchschnitt deutlich näher an den übrigen ~55–185s.
+30. **Erstes Golden Set (n=20) + automatisierter Batch-Runner — 90% komplett korrekt, alle Zielwerte übertroffen.**
+    Bisher gab es für die Freitext-Extraktion nur Einzel-Stichproben statt einer systematischen Messung. Umgesetzt:
+    `src/goldenSet.ts` (20 Fälle, alle 7 Kategorien abgedeckt,
+    `{input, expected: {amount, currency, cadence, category}}`) plus eine reine, unabhängig getestete Vergleichsfunktion
+    `compareToExpected()` (`src/__tests__/goldenSet.test.ts`, 7 Fälle). Da das Modell nur on-device läuft (Jest kann
+    `NitroModules` nicht laden, siehe App.test.tsx-Einschränkung), läuft die eigentliche Messung nicht in Jest, sondern
+    über einen neuen Batch-Runner im LLM-Test-Screen: ein Button führt alle 20 Fälle nacheinander durch denselben
+    `buildExtractionPrompt()`-Pfad wie die echte Freitext-Extraktion (inkl. `reset()` vor jedem Fall, siehe Lessons
+    Learned #9), vergleicht das Ergebnis gegen `expected` und zeigt eine Zusammenfassung plus Pro-Fall-Liste (✅/❌ mit
+    erwarteten vs. erhaltenen Werten). Jeder Fall läuft in einem eigenen `try/catch`, damit ein einzelner Parse-Fehler
+    nicht den ganzen Durchlauf abbricht. **Ergebnis (iOS-Simulator, ein Durchlauf):** Betrag 20/20 (100%), Häufigkeit
+    20/20 (100%), Kategorie 18/20 (90%), komplett korrekt 18/20 (90%) — übertrifft die Erfolgskriterien-Zielwerte
+    (85%/80%). Die zwei Kategorie-"Fehler" sind beide harmlos: "Hausratversicherung" wurde als "Sonstiges" statt
+    "Wohnen" eingeordnet (vertretbare Alternativ-Kategorisierung), "Spende" bekam ehrlich `needs_input` statt geraten
+    "Sonstiges" — keine gefährliche Fehlklassifikation mit falscher hoher Confidence. **Bewusste Einschränkungen dieser
+    ersten Version:** nur 20 statt der im Testplan vorgesehenen 30 Fälle (Laufzeit-Grund — jeder Fall braucht einen
+    echten CPU-Modellaufruf, ein 50er-Set hätte für einen ersten Durchlauf zu lange gedauert), und bewusst keine
+    mehrdeutigen/needs_input-Fälle in den Erwartungswerten (lässt sich später ergänzen). Die Liste ist beliebig
+    erweiterbar, ohne den Runner anzufassen. **Update: auf die vollen 30 Fälle erweitert (10 zusätzliche, bewusst mit
+    anderen Formulierungsmustern — andere Wortstellung/Verben, CHF/EUR-Mix statt nur CHF).** Zweiter Durchlauf
+    (iOS-Simulator): Betrag 30/30 (100%), Häufigkeit 30/30 (100%), Kategorie 27/30 (90%), komplett korrekt 27/30 (90%) —
+    praktisch identische Quote wie beim 20er-Lauf, skaliert also stabil. Alle drei Kategorie-"Fehler" drehen sich um
+    dieselbe Kategorie: "Sonstiges" ist offensichtlich die unschärfste Grenze im Set, nicht zufälliges Rauschen —
+    "Hausratversicherung" (erwartet Wohnen) und "Neue Winterjacke" (erwartet Sonstiges, Modell sagt Freizeit) sind
+    beides vertretbare Alternativ-Kategorisierungen, "Spende" bekommt wie beim ersten Lauf ehrlich `needs_input` statt
+    geraten. EUR-Fall ("Zugticket ... 59 EUR") korrekt erkannt, keine Auffälligkeit bei der Währung. **Update:
+    Latenz-Messung ergänzt.** Bisher gab es dafür nur ein Gefühl ("dauert teils über eine Minute auf CPU"), keine echte
+    Zahl. Jeder Golden-Set-Fall stoppt jetzt die Zeit von `reset()` bis zur fertigen `generate()`-Antwort (`Date.now()`
+    vor/nach, auch bei einem fehlgeschlagenen Fall gemessen — der Modellaufruf lief ja trotzdem), die Zusammenfassung
+    zeigt Durchschnitt/Min/Max, jeder Einzelfall seine eigene Zeit. **Ergebnis (iOS-Simulator, n=30):** Ø 14.1s, min
+    11.7s, max 15.3s — deutlich schneller und gleichmässiger als das bisherige Gefühl, das vermutlich vom langsameren
+    Android-Testgerät geprägt war (siehe Lessons Learned #22). **Update: dieselbe Messung auf echter Android-Hardware (
+    Galaxy S21 FE) nachgeholt** (brauchte vorher einen Rebuild mit Gradle 9.5.0, siehe eigener Fix, sowie freien
+    Gerätespeicher — die APK allein ist 215 MB). **Ergebnis:** 27/30 (90%) komplett korrekt — identische Quote und
+    dieselben drei Kategorie-Fehler wie im Simulator-Lauf, die Extraktions-Qualität ist also geräteunabhängig stabil.
+    Latenz dagegen deutlich anders: Ø 103.7s, min 54.4s, max 427.3s — rund 7× langsamer im Schnitt als der iOS-Simulator
+    (Mac-CPU vs. mobiler SoC, erwartbar), aber auch mit riesiger Streuung. Der 427.3s-Ausreisser ("Stromrechnung, jeden
+    Monat 85 CHF") war inhaltlich kein schwierigerer Fall als seine Nachbarn (66–183s) — das Handy war während des Laufs
+    kurz dunkel/im Ruhemodus. **Lehre:** wenn der Bildschirm während einer On-Device-Inferenz auf Android kurz dunkel
+    wird bzw. das Gerät in den Ruhemodus geht, kann das die Verarbeitung erheblich verlangsamen (Android drosselt
+    Hintergrundaktivität) — bei Latenz-Messungen den Screen aktiv halten, sonst verfälscht das die Zahlen. Für den
+    POC-Bericht heisst das: die 103.7s-Durchschnitt inkl. Ausreisser ist ein realistisches "Screen wurde kurz
+    dunkel"-Szenario, kein bereinigter Normalwert — ohne den 427s-Ausreisser läge der Durchschnitt deutlich näher an den
+    übrigen ~55–185s.
 
-31. **Wunschlisten-Golden-Set (n=14) für `pickBestMatch()` — reproduziert und formalisiert den "Butter"-Relevanz-Bug aus dem Preise-Tab als Regressionstest.** Der Preise-Tab (Lessons Learned zum DB-Commit, `f059b4a`/`1e5ffcb`) hat zwei Schritte: Freitext → Suchbegriff (Modell, `buildProductQueryPrompt`) und Suchbegriff → bester Treffer (rein deterministisch, `pickBestMatch`/`parseToppreiseHtml`, kein Modell beteiligt). Beim manuellen Testen fiel auf: eine Suche nach "Butter" lieferte als "günstigstes Angebot" ein Thermaltake-PC-Gehäuse (Farboption "Butter Caramel") statt echter Butter — `pickBestMatch` nimmt den ersten Treffer, dessen Produktname alle Such-Tokens als Teilstring enthält, ohne Produktkategorie oder Relevanz zu berücksichtigen. Umgesetzt: `src/priceMatchGoldenSet.ts` mit 14 handgebauten Fällen (`{query, candidates: [{productName, price}], expectedProductName}}`) — 9 eindeutige Suchen (Regressionsschutz für das, was heute schon funktioniert, u. a. genau das "Nespresso Vertuo"/Entsafter-Beispiel aus dem Kommentar in `pickBestMatch()`) und 5 Fälle, die den gefundenen Bug reproduzieren (3× generische Einzelwort-Suchen wie "Butter"/"Milch"/"Apfel", 2× ein Fall ganz ohne passenden Kandidaten — `pickBestMatch` liefert dabei nie `null`, sondern fällt auf `results[0]` zurück, selbst wenn nichts passt). Anders als der Freitext-Golden-Set (#30) läuft dieser Teil **ohne Modell/Netzwerk direkt in Jest** (`src/__tests__/priceMatchGoldenSet.test.ts`), da `pickBestMatch` eine reine Funktion ist — die Kandidaten werden dafür mit derselben `matchedAllTokens`-Logik wie `parseToppreiseHtml` in `PriceResult[]` übersetzt, damit `pickBestMatch` selbst unverändert getestet wird. **Bewusstes Test-Design:** keine einzelnen `expect(...).toBe(...)` pro Fall, sondern zwei Gruppen-Assertions — eine, die verlangt, dass die 9 "known good"-Fälle weiterhin bestehen (Regressionsschutz), und eine zweite, die verlangt, dass genau die 5 "known bad"-Fälle weiterhin fehlschlagen (dokumentiert den Ist-Zustand, statt ihn stillschweigend grün zu schalten oder CI unerwartet brechen zu lassen) — sobald jemand `pickBestMatch` um Kategorie-/Relevanz-Filterung erweitert, schlägt genau dieser zweite Test an und zeigt, welche Fälle aktualisiert werden müssen. **Ergebnis:** 9/14 korrekt, exakt wie erwartet — der Bug ist damit nicht mehr nur eine Einzelbeobachtung, sondern reproduzierbar dokumentiert. Bewusst **nicht** selbst gefixt (gehört einem Teamkollegen, siehe CLAUDE.md-Konvention, fremden Code nicht unaufgefordert zu ändern).
+31. **Wunschlisten-Golden-Set (n=14) für `pickBestMatch()` — reproduziert und formalisiert den "Butter"-Relevanz-Bug aus
+    dem Preise-Tab als Regressionstest.** Der Preise-Tab (Lessons Learned zum DB-Commit, `f059b4a`/`1e5ffcb`) hat zwei
+    Schritte: Freitext → Suchbegriff (Modell, `buildProductQueryPrompt`) und Suchbegriff → bester Treffer (rein
+    deterministisch, `pickBestMatch`/`parseToppreiseHtml`, kein Modell beteiligt). Beim manuellen Testen fiel auf: eine
+    Suche nach "Butter" lieferte als "günstigstes Angebot" ein Thermaltake-PC-Gehäuse (Farboption "Butter Caramel")
+    statt echter Butter — `pickBestMatch` nimmt den ersten Treffer, dessen Produktname alle Such-Tokens als Teilstring
+    enthält, ohne Produktkategorie oder Relevanz zu berücksichtigen. Umgesetzt: `src/priceMatchGoldenSet.ts` mit 14
+    handgebauten Fällen (`{query, candidates: [{productName, price}], expectedProductName}}`) — 9 eindeutige Suchen
+    (Regressionsschutz für das, was heute schon funktioniert, u. a. genau das "Nespresso Vertuo"/Entsafter-Beispiel aus
+    dem Kommentar in `pickBestMatch()`) und 5 Fälle, die den gefundenen Bug reproduzieren (3× generische
+    Einzelwort-Suchen wie "Butter"/"Milch"/"Apfel", 2× ein Fall ganz ohne passenden Kandidaten — `pickBestMatch` liefert
+    dabei nie `null`, sondern fällt auf `results[0]` zurück, selbst wenn nichts passt). Anders als der
+    Freitext-Golden-Set (#30) läuft dieser Teil **ohne Modell/Netzwerk direkt in Jest**
+    (`src/__tests__/priceMatchGoldenSet.test.ts`), da `pickBestMatch` eine reine Funktion ist — die Kandidaten werden
+    dafür mit derselben `matchedAllTokens`-Logik wie `parseToppreiseHtml` in `PriceResult[]` übersetzt, damit
+    `pickBestMatch` selbst unverändert getestet wird. **Bewusstes Test-Design:** keine einzelnen `expect(...).toBe(...)`
+    pro Fall, sondern zwei Gruppen-Assertions — eine, die verlangt, dass die 9 "known good"-Fälle weiterhin bestehen
+    (Regressionsschutz), und eine zweite, die verlangt, dass genau die 5 "known bad"-Fälle weiterhin fehlschlagen
+    (dokumentiert den Ist-Zustand, statt ihn stillschweigend grün zu schalten oder CI unerwartet brechen zu lassen) —
+    sobald jemand `pickBestMatch` um Kategorie-/Relevanz-Filterung erweitert, schlägt genau dieser zweite Test an und
+    zeigt, welche Fälle aktualisiert werden müssen. **Ergebnis:** 9/14 korrekt, exakt wie erwartet — der Bug ist damit
+    nicht mehr nur eine Einzelbeobachtung, sondern reproduzierbar dokumentiert. Bewusst **nicht** selbst gefixt (gehört
+    einem Teamkollegen, siehe CLAUDE.md-Konvention, fremden Code nicht unaufgefordert zu ändern).
 
-32. **Bestätigen eines per Foto erfassten Belegs schlug in der DB fehl — 'photo' fehlte an zwei Stellen im DB-Code.** Beim Testen im iOS-Simulator: Fehler beim Bestätigen eines aus einem Foto extrahierten Entwurfs (Freitext-Entwürfe funktionierten). Ursache gefunden: `LineItem['source']` (`budget.ts`) kennt vier Werte (`'free_text' | 'photo' | 'manual' | 'toppreise'`), aber Migration 1s CHECK-Constraint auf `line_items.source` (`schema.ts`, aus dem DB-Commit `f059b4a`) erlaubte nur drei davon — `'photo'` fehlte, vermutlich weil die DB-Schicht auf einem alten Stash-Stand von vor dem Kamera-Feature basierte (vgl. Lessons Learned #28). SQLite hat die Zeile deshalb mit einem CHECK-Constraint-Fehler abgelehnt. Zweite, verwandte Stelle mit demselben Loch gefunden: `isSource()` (`db/types.ts`, Type-Guard beim Zurücklesen aus der DB) kannte `'photo'` ebenfalls nicht — selbst nach einem reinen Constraint-Fix wäre der Wert beim Lesen still auf `'manual'` zurückgefallen, statt den echten Wert durchzureichen. **Fix:** `isSource()` um `'photo'` ergänzt, plus eine neue Migration 2, die `line_items` mit korrigierter CHECK-Constraint neu anlegt (SQLite kann eine CHECK-Constraint nicht per `ALTER TABLE` ändern — Standard-Workaround: Tabelle mit neuer Constraint anlegen, Daten kopieren, alte Tabelle löschen, neue umbenennen). Migration 1 wurde bewusst NICHT verändert (siehe Projekt-Regel dazu in `schema.ts`) — Geräte, die Migration 1 schon angewendet haben, laufen sonst auf einem anderen Schema als frisch installierte. **Stolperstein beim Tabellen-Rebuild:** die naheliegende Reihenfolge (alte Tabelle zuerst umbenennen, neue Tabelle danach auf den Originalnamen umbenennen) bricht die Fremdschlüssel-Referenz aus `price_results.line_item_id` — SQLite schreibt beim `RENAME TABLE` automatisch alle `REFERENCES`-Klauseln anderer Tabellen auf den neuen Namen um, wodurch die Referenz nach dem zweiten Rename ins Leere zeigt (auf den zwischenzeitlich gelöschten Namen). Fix: neue Tabelle unter einem Hilfsnamen anlegen, Daten kopieren, alte Tabelle löschen, dann erst die neue Tabelle auf den Originalnamen umbenennen — so wird die `REFERENCES`-Klausel nie umgeschrieben. Verifiziert: 3 neue Tests (`db.test.ts`) — Migration 2 behält bestehende Zeilen bei einem Upgrade von Version 1, `source: 'photo'` lässt sich speichern, und der Wert kommt beim Lesen unverändert zurück (nicht `isSource()`-gefiltert auf `'manual'`) — sowie manuell im iOS-Simulator: derselbe Simulator, der vorher den Fehler zeigte, wendet Migration 2 beim nächsten App-Start automatisch an, Foto-Beleg lässt sich danach bestätigen.
+32. **Bestätigen eines per Foto erfassten Belegs schlug in der DB fehl — 'photo' fehlte an zwei Stellen im DB-Code.**
+    Beim Testen im iOS-Simulator: Fehler beim Bestätigen eines aus einem Foto extrahierten Entwurfs (Freitext-Entwürfe
+    funktionierten). Ursache gefunden: `LineItem['source']` (`budget.ts`) kennt vier Werte
+    (`'free_text' | 'photo' | 'manual' | 'toppreise'`), aber Migration 1s CHECK-Constraint auf `line_items.source`
+    (`schema.ts`, aus dem DB-Commit `f059b4a`) erlaubte nur drei davon — `'photo'` fehlte, vermutlich weil die
+    DB-Schicht auf einem alten Stash-Stand von vor dem Kamera-Feature basierte (vgl. Lessons Learned #28). SQLite hat
+    die Zeile deshalb mit einem CHECK-Constraint-Fehler abgelehnt. Zweite, verwandte Stelle mit demselben Loch gefunden:
+    `isSource()` (`db/types.ts`, Type-Guard beim Zurücklesen aus der DB) kannte `'photo'` ebenfalls nicht — selbst nach
+    einem reinen Constraint-Fix wäre der Wert beim Lesen still auf `'manual'` zurückgefallen, statt den echten Wert
+    durchzureichen. **Fix:** `isSource()` um `'photo'` ergänzt, plus eine neue Migration 2, die `line_items` mit
+    korrigierter CHECK-Constraint neu anlegt (SQLite kann eine CHECK-Constraint nicht per `ALTER TABLE` ändern —
+    Standard-Workaround: Tabelle mit neuer Constraint anlegen, Daten kopieren, alte Tabelle löschen, neue umbenennen).
+    Migration 1 wurde bewusst NICHT verändert (siehe Projekt-Regel dazu in `schema.ts`) — Geräte, die Migration 1 schon
+    angewendet haben, laufen sonst auf einem anderen Schema als frisch installierte. **Stolperstein beim
+    Tabellen-Rebuild:** die naheliegende Reihenfolge (alte Tabelle zuerst umbenennen, neue Tabelle danach auf den
+    Originalnamen umbenennen) bricht die Fremdschlüssel-Referenz aus `price_results.line_item_id` — SQLite schreibt beim
+    `RENAME TABLE` automatisch alle `REFERENCES`-Klauseln anderer Tabellen auf den neuen Namen um, wodurch die Referenz
+    nach dem zweiten Rename ins Leere zeigt (auf den zwischenzeitlich gelöschten Namen). Fix: neue Tabelle unter einem
+    Hilfsnamen anlegen, Daten kopieren, alte Tabelle löschen, dann erst die neue Tabelle auf den Originalnamen
+    umbenennen — so wird die `REFERENCES`-Klausel nie umgeschrieben. Verifiziert: 3 neue Tests (`db.test.ts`) —
+    Migration 2 behält bestehende Zeilen bei einem Upgrade von Version 1, `source: 'photo'` lässt sich speichern, und
+    der Wert kommt beim Lesen unverändert zurück (nicht `isSource()`-gefiltert auf `'manual'`) — sowie manuell im
+    iOS-Simulator: derselbe Simulator, der vorher den Fehler zeigte, wendet Migration 2 beim nächsten App-Start
+    automatisch an, Foto-Beleg lässt sich danach bestätigen.
 
-33. **Bestehende Posten lassen sich wieder öffnen und bearbeiten — inkl. dauerhaftem Beleg-Foto pro Posten und "(manuell geändert)"-Kennzeichnung pro Feld.** Bisher liessen sich Budget-Einträge nur einmalig anlegen, nie mehr korrigieren (z.B. falsche Quittung gescannt) — Nutzer-Feedback: genau das fehlte. Umgesetzt in drei Teilen:
-    - **Bearbeiten:** `LineItemRow` (Budget-Tab) und die "Bereits erfasst für TT.MM.JJJJ"-Liste im Kalender-Tag-Detail (Punkt 29) sind jetzt antippbar und öffnen den Entwurf-Screen mit den bestehenden Werten vorausgefüllt (`beginEditItem` in `ExpenseFlow`). "Bestätigen" ruft dann `updateLineItem` (UPDATE) statt `addLineItems` (INSERT) auf — App-weiter State-Übergang analog zu `prefilledDate`/`onSelectDate` (Budget-Tab liegt auf einem anderen Screen als "Ausgabe erfassen", der Kalender-Tag-Detail-Fall braucht das nicht, da man dort schon auf dem richtigen Screen ist). `DraftScreen` bekommt einen neuen `key={draftVersion}`, der bei jeder neuen Extraktion (Freitext, Foto, oder erneutes Scannen während einer Bearbeitung) hochgezählt wird — erzwingt einen sauberen Remount, damit der lokale TextInput-State (Beschreibung/Betrag/…) garantiert aus den neuen Werten initialisiert wird, statt an alten Eingaben hängen zu bleiben.
-    - **Dauerhaftes Beleg-Foto pro Posten:** Bisher wurde die Foto-Kopie direkt nach dem Bestätigen gelöscht (Punkt 24) — beim erneuten Öffnen zum Bearbeiten war dadurch kein Foto mehr da. Jetzt bleibt pro Posten genau ein Beleg-Foto dauerhaft erhalten (`LineItem.photoFilename`, neue DB-Spalte, siehe unten), bis entweder eine neue Quittung gescannt wird (ersetzt die Datei unter demselben Namen) oder der Posten gelöscht wird. Dafür zwei getrennte Dateinamens-Räume in `RNFS.DocumentDirectoryPath`: `beleg-scan-…` für einen frisch gescannten, noch nicht bestätigten Zwischenstand (wird von den bestehenden Aufräum-Funktionen — jetzt `cleanupTempBelegFiles`/`cleanupOldTempBelegFiles` — weiterhin automatisch aufgeräumt) und `beleg-item-<id>.jpg` für das dauerhafte Foto eines bestätigten Postens (von den Aufräum-Funktionen bewusst ausgenommen, sonst würde z.B. das 24h-Sicherheitsnetz irgendwann echte, noch verknüpfte Fotos löschen). Im Entwurf-Screen gibt es dafür einen neuen "📷 Neue Quittung"-Button (nur im Bearbeiten-Modus sichtbar), der denselben Foto-Erfassungs-Pfad (`handleFoto`/`processBelegUri`) wie sonst auch aufruft, aber das Ergebnis in denselben Entwurf einspeist statt einen neuen zu erzeugen — beim Bestätigen wird die Temp-Datei zum stabilen Dateinamen befördert (`RNFS.moveFile`, altes Foto desselben Postens vorher gelöscht). Beim blossen Verwerfen (ohne zu bestätigen) wird nur eine noch unbestätigte Scan-Temp-Datei gelöscht, nie das dauerhafte Foto des Postens — verhindert über eine eigene `pendingPhotoTempPath`-Statusvariable, die zwischen "zeigt gerade nur das gespeicherte Foto" und "zeigt eine frisch gescannte, noch unbestätigte Datei" unterscheidet.
-    - **"(manuell geändert)"-Kennzeichnung pro Feld:** Ohne das sah eine von der KI abweichende Zahl nach einem KI-Erkennungsfehler aus, obwohl sie bewusst vom Nutzer korrigiert wurde (Nutzer-Feedback: "man weiss nach 6 Monaten nicht mehr, ob die KI sich geirrt hat oder man selbst korrigiert hat"). Neue DB-Spalte `LineItem.manuallyEditedFields: string[]` (JSON-Array der Feldnamen description/amount/currency/cadence/category/date). `DraftScreen` vergleicht live (bei jedem Tastenanschlag, `useMemo`) den aktuellen Feldwert gegen die Baseline dieser Sitzung (`draft`/`initialDate`) und zeigt sofort "(manuell geändert)" neben dem betroffenen Feld-Label — vereinigt mit den aus einer früheren Sitzung schon persistierten Feldern, damit ein nicht erneut angefasstes Feld seine Markierung behält. Wird beim Bestätigen als Union aus altem und neuem Stand persistiert. **Wichtig, per Test entdeckt:** beim erneuten Scannen einer Quittung während einer Bearbeitung muss die Markierung zurückgesetzt werden (neue Quittung = neue Baseline, eine alte Korrektur bezog sich auf die alte Extraktion) — das griff zunächst NICHT automatisch, weil `editingItem` (die Quelle für die persistierten Felder) beim Rescan nie aktualisiert wurde; Fix: `processBelegUri` setzt `editingItem.manuallyEditedFields` explizit auf `[]` zurück, sobald während einer Bearbeitung neu gescannt wird. Bewusst NICHT versucht: eine Änderung zurück auf einen Wert, der zufällig wieder der ursprünglichen KI-Zahl entspricht, aus einer SPÄTEREN, separaten Bearbeitungs-Sitzung heraus als "nicht mehr manuell geändert" zu erkennen — dafür müsste die ursprüngliche KI-Zahl dauerhaft separat gespeichert werden (weitere DB-Spalte), auf Nutzerwunsch bewusst nicht umgesetzt (seltener Fall, hoher Aufwand). Innerhalb EINER Sitzung (hin- und wieder zurücktippen vor dem Bestätigen) funktioniert das bereits korrekt, da nur der Endzustand beim Bestätigen zählt.
+33. **Bestehende Posten lassen sich wieder öffnen und bearbeiten — inkl. dauerhaftem Beleg-Foto pro Posten und "(manuell
+    geändert)"-Kennzeichnung pro Feld.** Bisher liessen sich Budget-Einträge nur einmalig anlegen, nie mehr korrigieren
+    (z.B. falsche Quittung gescannt) — Nutzer-Feedback: genau das fehlte. Umgesetzt in drei Teilen:
+    - **Bearbeiten:** `LineItemRow` (Budget-Tab) und die "Bereits erfasst für TT.MM.JJJJ"-Liste im Kalender-Tag-Detail
+      (Punkt 29) sind jetzt antippbar und öffnen den Entwurf-Screen mit den bestehenden Werten vorausgefüllt
+      (`beginEditItem` in `ExpenseFlow`). "Bestätigen" ruft dann `updateLineItem` (UPDATE) statt `addLineItems` (INSERT)
+      auf — App-weiter State-Übergang analog zu `prefilledDate`/`onSelectDate` (Budget-Tab liegt auf einem anderen
+      Screen als "Ausgabe erfassen", der Kalender-Tag-Detail-Fall braucht das nicht, da man dort schon auf dem richtigen
+      Screen ist). `DraftScreen` bekommt einen neuen `key={draftVersion}`, der bei jeder neuen Extraktion (Freitext,
+      Foto, oder erneutes Scannen während einer Bearbeitung) hochgezählt wird — erzwingt einen sauberen Remount, damit
+      der lokale TextInput-State (Beschreibung/Betrag/…) garantiert aus den neuen Werten initialisiert wird, statt an
+      alten Eingaben hängen zu bleiben.
+    - **Dauerhaftes Beleg-Foto pro Posten:** Bisher wurde die Foto-Kopie direkt nach dem Bestätigen gelöscht (Punkt
+      24) — beim erneuten Öffnen zum Bearbeiten war dadurch kein Foto mehr da. Jetzt bleibt pro Posten genau ein
+      Beleg-Foto dauerhaft erhalten (`LineItem.photoFilename`, neue DB-Spalte, siehe unten), bis entweder eine neue
+      Quittung gescannt wird (ersetzt die Datei unter demselben Namen) oder der Posten gelöscht wird. Dafür zwei
+      getrennte Dateinamens-Räume in `RNFS.DocumentDirectoryPath`: `beleg-scan-…` für einen frisch gescannten, noch
+      nicht bestätigten Zwischenstand (wird von den bestehenden Aufräum-Funktionen — jetzt `cleanupTempBelegFiles`/
+      `cleanupOldTempBelegFiles` — weiterhin automatisch aufgeräumt) und `beleg-item-<id>.jpg` für das dauerhafte Foto
+      eines bestätigten Postens (von den Aufräum-Funktionen bewusst ausgenommen, sonst würde z.B. das
+      24h-Sicherheitsnetz irgendwann echte, noch verknüpfte Fotos löschen). Im Entwurf-Screen gibt es dafür einen neuen
+      "📷 Neue Quittung"-Button (nur im Bearbeiten-Modus sichtbar), der denselben Foto-Erfassungs-Pfad (`handleFoto`/
+      `processBelegUri`) wie sonst auch aufruft, aber das Ergebnis in denselben Entwurf einspeist statt einen neuen zu
+      erzeugen — beim Bestätigen wird die Temp-Datei zum stabilen Dateinamen befördert (`RNFS.moveFile`, altes Foto
+      desselben Postens vorher gelöscht). Beim blossen Verwerfen (ohne zu bestätigen) wird nur eine noch unbestätigte
+      Scan-Temp-Datei gelöscht, nie das dauerhafte Foto des Postens — verhindert über eine eigene `pendingPhotoTempPath`
+      -Statusvariable, die zwischen "zeigt gerade nur das gespeicherte Foto" und "zeigt eine frisch gescannte, noch
+      unbestätigte Datei" unterscheidet.
+    - **"(manuell geändert)"-Kennzeichnung pro Feld:** Ohne das sah eine von der KI abweichende Zahl nach einem
+      KI-Erkennungsfehler aus, obwohl sie bewusst vom Nutzer korrigiert wurde (Nutzer-Feedback: "man weiss nach 6
+      Monaten nicht mehr, ob die KI sich geirrt hat oder man selbst korrigiert hat"). Neue DB-Spalte
+      `LineItem.manuallyEditedFields: string[]` (JSON-Array der Feldnamen
+      description/amount/currency/cadence/category/date). `DraftScreen` vergleicht live (bei jedem Tastenanschlag,
+      `useMemo`) den aktuellen Feldwert gegen die Baseline dieser Sitzung (`draft`/`initialDate`) und zeigt sofort "
+      (manuell geändert)" neben dem betroffenen Feld-Label — vereinigt mit den aus einer früheren Sitzung schon
+      persistierten Feldern, damit ein nicht erneut angefasstes Feld seine Markierung behält. Wird beim Bestätigen als
+      Union aus altem und neuem Stand persistiert. **Wichtig, per Test entdeckt:** beim erneuten Scannen einer Quittung
+      während einer Bearbeitung muss die Markierung zurückgesetzt werden (neue Quittung = neue Baseline, eine alte
+      Korrektur bezog sich auf die alte Extraktion) — das griff zunächst NICHT automatisch, weil `editingItem` (die
+      Quelle für die persistierten Felder) beim Rescan nie aktualisiert wurde; Fix: `processBelegUri` setzt
+      `editingItem.manuallyEditedFields` explizit auf `[]` zurück, sobald während einer Bearbeitung neu gescannt wird.
+      Bewusst NICHT versucht: eine Änderung zurück auf einen Wert, der zufällig wieder der ursprünglichen KI-Zahl
+      entspricht, aus einer SPÄTEREN, separaten Bearbeitungs-Sitzung heraus als "nicht mehr manuell geändert" zu
+      erkennen — dafür müsste die ursprüngliche KI-Zahl dauerhaft separat gespeichert werden (weitere DB-Spalte), auf
+      Nutzerwunsch bewusst nicht umgesetzt (seltener Fall, hoher Aufwand). Innerhalb EINER Sitzung (hin- und wieder
+      zurücktippen vor dem Bestätigen) funktioniert das bereits korrekt, da nur der Endzustand beim Bestätigen zählt.
 
-    **DB:** Migration 3 (`ALTER TABLE line_items ADD COLUMN photo_filename TEXT` + `ADD COLUMN manually_edited_fields TEXT NOT NULL DEFAULT '[]'`) — anders als Migration 2 (CHECK-Constraint-Fix, Tabellen-Rebuild nötig) reicht hier ein einfaches `ADD COLUMN`, da nur nullable/mit Default versehene Spalten hinzukommen. Neue `sql.ts`-Helfer `readStringArray`/`toSqlStringArray` fürs JSON-(De-)Serialisieren (SQLite kennt keinen Array-Typ). `LineItemPatch` um `photoFilename`/`manuallyEditedFields` erweitert. **Verifiziert:** 3 neue Tests in `db.test.ts` (Migrationen 2+3 zusammen behalten bestehende Zeilen bei einem Upgrade von Version 1 inkl. sinnvoller Defaults für die neuen Spalten, `updateLineItem` schreibt beide neuen Felder korrekt inkl. JSON-Array-Spalte, Rundreise-Test für `photoFilename`/`manuallyEditedFields`) sowie manuell im iOS-Simulator: Foto bleibt beim erneuten Öffnen sichtbar, "(manuell geändert)" erscheint korrekt bei einem geänderten Betrag und verschwindet zuverlässig nach einer neu gescannten Quittung.
+    **DB:** Migration 3 (`ALTER TABLE line_items ADD COLUMN photo_filename TEXT` +
+    `ADD COLUMN manually_edited_fields TEXT NOT NULL DEFAULT '[]'`) — anders als Migration 2 (CHECK-Constraint-Fix,
+    Tabellen-Rebuild nötig) reicht hier ein einfaches `ADD COLUMN`, da nur nullable/mit Default versehene Spalten
+    hinzukommen. Neue `sql.ts`-Helfer `readStringArray`/`toSqlStringArray` fürs JSON- (De-)Serialisieren (SQLite kennt
+    keinen Array-Typ). `LineItemPatch` um `photoFilename`/`manuallyEditedFields` erweitert. **Verifiziert:** 3 neue
+    Tests in `db.test.ts` (Migrationen 2+3 zusammen behalten bestehende Zeilen bei einem Upgrade von Version 1 inkl.
+    sinnvoller Defaults für die neuen Spalten, `updateLineItem` schreibt beide neuen Felder korrekt inkl.
+    JSON-Array-Spalte, Rundreise-Test für `photoFilename`/`manuallyEditedFields`) sowie manuell im iOS-Simulator: Foto
+    bleibt beim erneuten Öffnen sichtbar, "(manuell geändert)" erscheint korrekt bei einem geänderten Betrag und
+    verschwindet zuverlässig nach einer neu gescannten Quittung.
 
-34. **Löschbutton für bestehende Posten.** Direkte Ergänzung zu Punkt 33 (Bearbeiten): im Entwurf-Screen erscheint jetzt, nur im Bearbeiten-Modus, neben "Bestätigen"/"Verwerfen" ein roter "Löschen"-Button (`DANGER_COLOR`). Löst einen `Alert.alert`-Bestätigungsdialog aus (destruktive Aktion, analog zum bestehenden Foto-Auswahl-Dialog), erst nach Bestätigung greift `handleLoeschen` in `ExpenseFlow`: löscht die DB-Zeile (`deleteLineItem`, bereits vorhandene Repository-Funktion), das App-weite `items`-State (optimistisch, mit Rollback bei DB-Fehler, gleiches Muster wie `addItem`/`updateItem`), sowie das dauerhafte Beleg-Foto des Postens (`photoFilename`, siehe Punkt 33), falls eines gesetzt war. Ein evtl. gerade frisch gescannter, noch NICHT bestätigter Zwischenstand (`pendingPhotoTempPath`) wird separat mitgelöscht, statt verwaist liegen zu bleiben. Verifiziert im iOS-Simulator: Posten inkl. Beleg-Foto lässt sich löschen, verschwindet sofort aus dem Budget-Tab, keine Fehler.
+34. **Löschbutton für bestehende Posten.** Direkte Ergänzung zu Punkt 33 (Bearbeiten): im Entwurf-Screen erscheint
+    jetzt, nur im Bearbeiten-Modus, neben "Bestätigen"/"Verwerfen" ein roter "Löschen"-Button (`DANGER_COLOR`). Löst
+    einen `Alert.alert`-Bestätigungsdialog aus (destruktive Aktion, analog zum bestehenden Foto-Auswahl-Dialog), erst
+    nach Bestätigung greift `handleLoeschen` in `ExpenseFlow`: löscht die DB-Zeile (`deleteLineItem`, bereits vorhandene
+    Repository-Funktion), das App-weite `items`-State (optimistisch, mit Rollback bei DB-Fehler, gleiches Muster wie
+    `addItem`/`updateItem`), sowie das dauerhafte Beleg-Foto des Postens (`photoFilename`, siehe Punkt 33), falls eines
+    gesetzt war. Ein evtl. gerade frisch gescannter, noch NICHT bestätigter Zwischenstand (`pendingPhotoTempPath`) wird
+    separat mitgelöscht, statt verwaist liegen zu bleiben. Verifiziert im iOS-Simulator: Posten inkl. Beleg-Foto lässt
+    sich löschen, verschwindet sofort aus dem Budget-Tab, keine Fehler.
 
-35. **"Rückgängig"-Banner nach Löschen oder neuer Quittung (Nutzer-Feedback nach Punkt 34).** Nach dem Löschen eines Postens oder dem Bestätigen mit frisch gescannter Quittung (die die alte Quittung eines bearbeiteten Postens ersetzt) erscheint für 10s (`UNDO_WINDOW_MS`) ein Banner am unteren Bildschirmrand ("XY gelöscht" / "Neue Quittung übernommen" + "Rückgängig"-Button), mit einem Countdown-Balken (Wiederverwendung des `Animated`-Musters aus `DownloadProgressBar`, `width` schrumpft von 100% auf 0%). Läuft app-weit (`undo`-State in `App()`, `key={undo.key}` erzwingt bei jedem neuen Banner einen sauberen Remount von Timer/Animation), damit es auch nach einem Tab-Wechsel sichtbar bleibt.
+35. **"Rückgängig"-Banner nach Löschen oder neuer Quittung (Nutzer-Feedback nach Punkt 34).** Nach dem Löschen eines
+    Postens oder dem Bestätigen mit frisch gescannter Quittung (die die alte Quittung eines bearbeiteten Postens
+    ersetzt) erscheint für 10s (`UNDO_WINDOW_MS`) ein Banner am unteren Bildschirmrand ("XY gelöscht" / "Neue Quittung
+    übernommen" + "Rückgängig"-Button), mit einem Countdown-Balken (Wiederverwendung des `Animated`-Musters aus
+    `DownloadProgressBar`, `width` schrumpft von 100% auf 0%). Läuft app-weit (`undo`-State in `App()`, `key={undo.key}`
+    erzwingt bei jedem neuen Banner einen sauberen Remount von Timer/Animation), damit es auch nach einem Tab-Wechsel
+    sichtbar bleibt.
 
-    **Zentrale Design-Entscheidung — dateibasierte Nebenwirkungen erst nach Ablauf des Fensters ausführen, nicht sofort:** Sowohl Löschen als auch das Ersetzen einer Quittung haben eine Datei-Komponente (Beleg-Foto löschen bzw. überschreiben). Würde man die Datei sofort löschen/überschreiben, wäre "Rückgängig" ein paar Sekunden später kaputt (Foto schon weg). Deshalb: DB-Zeile und lokaler State ändern sich sofort (billig, reversibel — Zeile lässt sich einfach neu einfügen bzw. mit den alten Werten zurück-updaten), die Foto-Datei wird nur **beiseitegelegt** (Löschen → gar nicht angefasst, nur `onExpire` löscht sie am Ende; Quittung ersetzen → altes Foto zu `<name>.jpg.undo` umbenannt statt gelöscht, erst `onExpire` löscht den Backup endgültig). `onUndo`/`onExpire` sind exklusiv — nur eine der beiden Aktionen läuft jemals pro Banner, je nachdem ob innerhalb der 10s auf "Rückgängig" getippt wurde oder nicht. Ein noch offenes Banner wird bei einer zweiten Undo-fähigen Aktion nicht einfach verworfen, sondern dessen `onExpire` sofort nachgeholt — sonst würde z. B. eine zum Löschen vorgemerkte Foto-Datei nie aufgeräumt.
+    **Zentrale Design-Entscheidung — dateibasierte Nebenwirkungen erst nach Ablauf des Fensters ausführen, nicht
+    sofort:** Sowohl Löschen als auch das Ersetzen einer Quittung haben eine Datei-Komponente (Beleg-Foto löschen bzw.
+    überschreiben). Würde man die Datei sofort löschen/überschreiben, wäre "Rückgängig" ein paar Sekunden später kaputt
+    (Foto schon weg). Deshalb: DB-Zeile und lokaler State ändern sich sofort (billig, reversibel — Zeile lässt sich
+    einfach neu einfügen bzw. mit den alten Werten zurück-updaten), die Foto-Datei wird nur **beiseitegelegt**
+    (Löschen → gar nicht angefasst, nur `onExpire` löscht sie am Ende; Quittung ersetzen → altes Foto zu
+    `<name>.jpg.undo` umbenannt statt gelöscht, erst `onExpire` löscht den Backup endgültig). `onUndo`/`onExpire` sind
+    exklusiv — nur eine der beiden Aktionen läuft jemals pro Banner, je nachdem ob innerhalb der 10s auf "Rückgängig"
+    getippt wurde oder nicht. Ein noch offenes Banner wird bei einer zweiten Undo-fähigen Aktion nicht einfach
+    verworfen, sondern dessen `onExpire` sofort nachgeholt — sonst würde z. B. eine zum Löschen vorgemerkte Foto-Datei
+    nie aufgeräumt.
 
-    Bewusst **kein** Undo-Banner bei einer reinen Text-/Betrags-Korrektur ohne "Neue Quittung" (kein Foto-Wechsel, kein Datenverlust-Risiko) und nicht beim Anlegen eines neuen Postens — nur die zwei vom Nutzer genannten Fälle. Verifiziert im iOS-Simulator: Banner erscheint nach Löschen, "Rückgängig" stellt den Posten wieder her (inkl. korrektem Wiedererscheinen im Budget-Tab).
+    Bewusst **kein** Undo-Banner bei einer reinen Text-/Betrags-Korrektur ohne "Neue Quittung" (kein Foto-Wechsel, kein
+    Datenverlust-Risiko) und nicht beim Anlegen eines neuen Postens — nur die zwei vom Nutzer genannten Fälle.
+    Verifiziert im iOS-Simulator: Banner erscheint nach Löschen, "Rückgängig" stellt den Posten wieder her (inkl.
+    korrektem Wiedererscheinen im Budget-Tab).
 
-36. **Visueller Feinschliff — bewusst reines Styling, keine Logik-/Verhaltensänderung.** Auf expliziten Wunsch ("es ist zwar ein PoC, aber es sollte etwas schöner aussehen, ansonsten nichts an der Logik ändern") eigener Branch `design/visual-polish` nur für die Optik der gesamten App:
-    - **Farb-/Typografie-System konsolidiert:** `useThemeColors()` um `surface`/`surfaceRaised` (Karten-Hintergrund, getrennt vom `background`-Canvas fürs "Layered"-Aussehen), `accent`/`accentSoft` (ein einziges theme-abhängiges Blau statt verstreuter Hex-Literale wie `'#2563eb'`) und `shadow` erweitert. Karten (`lineItemRow`/`priceCard`) nutzen jetzt Schatten statt Rahmen, `label` wurde zu einem Uppercase-Caption-Stil, `warningBox` zu einer linksbündigen Akzentleiste statt vollflächigem Rahmen.
-    - **Eigene `AppButton`-Komponente ersetzt alle 13 `<Button>`-Stellen:** RNs eingebautes `<Button>` lässt sich nicht stylen (kein Padding/Radius/Schatten) — `AppButton` ist ein `Pressable` mit `variant: 'primary' | 'secondary' | 'danger'`, Press-State-Feedback und konsistentem Radius/Schatten je Variante.
-    - **Near-miss vor dem Release gefangen:** beim Ersetzen des hartcodierten `'#2563eb'` im Kalender-Tab durch `colors.accent` fehlte `colors.accent` zunächst in der `useMemo`-Dependency-Liste von `markedDates` — hätte dazu geführt, dass die Punkt-Farbe bei einem Theme-Wechsel nicht aktualisiert. Vor dem Testen selbst bemerkt und ergänzt.
-    - **Regression nach erstem Nutzer-Review gefunden und gefixt:** der grössere `title`-Stil (`fontSize: 23`) liess "LiteRT-LM Test — Gemma 4 E2B-it" auf dem LLM-Test-Screen mitten im Wort umbrechen ("...E2B-\nit"). Fix: `fontSize` auf 20 reduziert (`letterSpacing` von -0.4 auf -0.3 angepasst), auf demselben Screen verifiziert.
-    - **Horizontaler Scroll-Indikator für die Tab-Leiste (Nutzerwunsch):** die Tab-Leiste (`ScreenTabs`) scrollt seit 5 Tabs horizontal, aber ohne jeden sichtbaren Hinweis darauf — ein neuer Nutzer hätte nicht gewusst, dass rechts noch mehr Tabs liegen. `showsHorizontalScrollIndicator` (nativ, grau, blendet nach kurzer Zeit aus) reichte dafür nicht. Eigener, dauerhaft sichtbarer Indikator: `Animated.ScrollView` trackt den Scroll-Offset (`Animated.event` auf `scrollX`), `onContentSizeChange`/`onLayout` liefern Gesamt-/Sichtbreite, daraus wird eine proportionale "Thumb"-Leiste berechnet (Breite = sichtbarer Anteil, `translateX` interpoliert von `scrollX`) und unter der Tab-Leiste als schmaler, farbiger Balken (`colors.accent`) gerendert — bleibt bei weniger Tabs (kein Overflow) automatisch unsichtbar (`contentWidth > viewportWidth`-Check). Verifiziert im iOS-Simulator: Balken sitzt links bei "Ausgabe erfassen" und wandert korrekt bis rechts bei "LLM-Test".
-    - **Verifikation:** `tsc --noEmit`/`lint`/`jest` bei jedem Schritt grün gehalten (0 TS-Fehler, 0 Lint-Fehler ausser den vorbestehenden Warnungen, 66/66 Tests), mehrere Screenshots im iOS-Simulator vom Nutzer freigegeben.
+36. **Visueller Feinschliff — bewusst reines Styling, keine Logik-/Verhaltensänderung.** Auf expliziten Wunsch ("es ist
+    zwar ein PoC, aber es sollte etwas schöner aussehen, ansonsten nichts an der Logik ändern") eigener Branch
+    `design/visual-polish` nur für die Optik der gesamten App:
+    - **Farb-/Typografie-System konsolidiert:** `useThemeColors()` um `surface`/`surfaceRaised` (Karten-Hintergrund,
+      getrennt vom `background`-Canvas fürs "Layered"-Aussehen), `accent`/`accentSoft` (ein einziges theme-abhängiges
+      Blau statt verstreuter Hex-Literale wie `'#2563eb'`) und `shadow` erweitert. Karten (`lineItemRow`/`priceCard`)
+      nutzen jetzt Schatten statt Rahmen, `label` wurde zu einem Uppercase-Caption-Stil, `warningBox` zu einer
+      linksbündigen Akzentleiste statt vollflächigem Rahmen.
+    - **Eigene `AppButton`-Komponente ersetzt alle 13 `<Button>`-Stellen:** RNs eingebautes `<Button>` lässt sich nicht
+      stylen (kein Padding/Radius/Schatten) — `AppButton` ist ein `Pressable` mit
+      `variant: 'primary' | 'secondary' | 'danger'`, Press-State-Feedback und konsistentem Radius/Schatten je Variante.
+    - **Near-miss vor dem Release gefangen:** beim Ersetzen des hartcodierten `'#2563eb'` im Kalender-Tab durch
+      `colors.accent` fehlte `colors.accent` zunächst in der `useMemo`-Dependency-Liste von `markedDates` — hätte dazu
+      geführt, dass die Punkt-Farbe bei einem Theme-Wechsel nicht aktualisiert. Vor dem Testen selbst bemerkt und
+      ergänzt.
+    - **Regression nach erstem Nutzer-Review gefunden und gefixt:** der grössere `title`-Stil (`fontSize: 23`) liess
+      "LiteRT-LM Test — Gemma 4 E2B-it" auf dem LLM-Test-Screen mitten im Wort umbrechen ("...E2B-\nit"). Fix:
+      `fontSize` auf 20 reduziert (`letterSpacing` von -0.4 auf -0.3 angepasst), auf demselben Screen verifiziert.
+    - **Horizontaler Scroll-Indikator für die Tab-Leiste (Nutzerwunsch):** die Tab-Leiste (`ScreenTabs`) scrollt seit 5
+      Tabs horizontal, aber ohne jeden sichtbaren Hinweis darauf — ein neuer Nutzer hätte nicht gewusst, dass rechts
+      noch mehr Tabs liegen. `showsHorizontalScrollIndicator` (nativ, grau, blendet nach kurzer Zeit aus) reichte dafür
+      nicht. Eigener, dauerhaft sichtbarer Indikator: `Animated.ScrollView` trackt den Scroll-Offset (`Animated.event`
+      auf `scrollX`), `onContentSizeChange`/`onLayout` liefern Gesamt-/Sichtbreite, daraus wird eine proportionale
+      "Thumb"-Leiste berechnet (Breite = sichtbarer Anteil, `translateX` interpoliert von `scrollX`) und unter der
+      Tab-Leiste als schmaler, farbiger Balken (`colors.accent`) gerendert — bleibt bei weniger Tabs (kein Overflow)
+      automatisch unsichtbar (`contentWidth > viewportWidth`-Check). Verifiziert im iOS-Simulator: Balken sitzt links
+      bei "Ausgabe erfassen" und wandert korrekt bis rechts bei "LLM-Test".
+    - **Verifikation:** `tsc --noEmit`/`lint`/`jest` bei jedem Schritt grün gehalten (0 TS-Fehler, 0 Lint-Fehler ausser
+      den vorbestehenden Warnungen, 66/66 Tests), mehrere Screenshots im iOS-Simulator vom Nutzer freigegeben.
 
-37. **Bug: Budget-Tab zeigte Posten aller Monate gemischt statt nach Monat getrennt.** Nutzer-Report: eine im September erfasste Miete (1000 CHF) und eine im Juli erfasste Miete (1200 CHF, per Kalender rückwirkend eingetragen) erschienen beide gleichzeitig im Budget-Tab und wurden gemeinsam verrechnet — obwohl pro Monat eigentlich nur die jeweils eigenen Posten zählen sollten. **Wichtiger Befund bei der Fehlersuche:** die DB-Schicht war nie das Problem — `line_items.month_id` wird schon seit dem ursprünglichen DB-Commit korrekt pro Posten aus `monthOfDate(item.date)` gesetzt (`insertLineItem()` in `repository.ts`), und `listLineItemsForMonth()`/`computeTotals(db, month)` (beide bereits vorhanden, SQL-seitig sauber nach Monat gefiltert) wurden schlicht von keinem Screen benutzt. Der eigentliche Bug lag rein in `App.tsx`: `listLineItems(db)` lädt bewusst ALLE Posten aller Monate auf einmal in den React-State (richtig so — Kalender-Tab und "Bearbeiten"-Sprung brauchen das monatsübergreifend), aber `BudgetScreen` reichte diese komplette, ungefilterte Liste direkt an `computeBudget()` durch, ohne je nach Monat zu filtern. Das monatliche Einkommen war zusätzlich strukturell auf "immer der heutige Kalendermonat" hartcodiert (`setIncomeCents(db, monthOfDate(todayIso()), …)`), es gab also gar keine Möglichkeit, ein Einkommen für einen anderen Monat zu hinterlegen. **Fix:** `BudgetScreen` bekommt einen eigenen `selectedMonth`-State (Default: aktueller Monat) mit zwei neuen Pfeil-Buttons ("‹ September 2026 ›") zum Vor-/Zurückblättern (`shiftMonth()`/`formatMonthLabel()`, neue reine Helferfunktionen — `formatMonthLabel` nutzt `toLocaleDateString('de-CH', {month:'long', year:'numeric'})`, passend zum bereits an anderer Stelle verwendeten Locale-Format in `pdfExport.ts`). Die App-weite `items`-Liste bleibt unangetastet (weiterhin alle Monate, für Kalender/Bearbeiten), `BudgetScreen` filtert sie selbst per `useMemo` auf `monthOfDate(item.date) === selectedMonth` — dieselbe Filterlogik, die die DB-Schicht in `listLineItemsForMonth()` schon hatte, nur jetzt auch tatsächlich angewendet. Einkommen wurde von einem einzelnen App-weiten State auf zwei neue Funktionen umgestellt, die `BudgetScreen` als Props bekommt (`getIncomeForMonth`/`setIncomeForMonth`, beide wrappen die längst vorhandenen, aber ungenutzten `getMonth`/`setIncomeCents` aus dem Repository) — `BudgetScreen` lädt das Einkommen des `selectedMonth` bei jedem Monatswechsel per `useEffect` frisch aus der DB nach (mit `cancelled`-Flag gegen Race Conditions bei schnellem Weiterblättern), statt es wie die Posten dauerhaft im Speicher zu halten. PDF-Export exportiert dadurch automatisch nur noch den gerade sichtbaren Monat (`monthItems` statt der kompletten Liste), der Dateiname trägt jetzt zusätzlich den Monat (`budgetpilot-bericht-2026-09-<timestamp>.pdf`). **Verifiziert im iOS-Simulator:** September 2026 zeigt nach dem Fix nur noch die September-Miete (1000 CHF) und die dort erfassten geplanten Käufe: Restbudget 3935.05 CHF (78.7%); Juli 2026 zeigt separat nur die Juli-Miete (1200 CHF), keine geplanten Käufe, und ein leeres (nicht das September-)Einkommensfeld — genau das vom Nutzer erwartete Verhalten. **Lehre:** die DB-/Repository-Schicht in diesem Projekt ist grosszügig genug angelegt worden (`listLineItemsForMonth`, `computeTotals` pro Monat existierten schon), dass ein UI-Bug wie dieser nicht immer ein Zeichen für ein fehlendes Feature ist — es lohnt sich, zuerst zu prüfen, ob die richtige Funktion bereits existiert, bevor man sie neu baut. **Nachtrag (Nutzerwunsch direkt danach):** einzeln durch Monate blättern war für weite Sprünge (z. B. von September zurück in den Januar) zu langsam — antippen von "September 2026" öffnet jetzt ein `Modal`-Popup mit eigener Jahres-Navigation ("‹ 2026 ›") und einem 12-Monats-Raster (kurze Monatsnamen via `toLocaleDateString(..., {month:'short'})`), der aktuell gewählte Monat ist farblich hervorgehoben. Popup-Jahr ist bewusst ein eigener State (`pickerYear`, initialisiert beim Öffnen aus dem gerade sichtbaren Monat) statt direkt an `selectedMonth` gekoppelt — so verändert reines Jahre-Vorblättern im Popup noch nicht den im Hintergrund sichtbaren Monat, erst ein Antippen einer Monatskachel übernimmt die Auswahl. Kein natives Picker-Modul nötig (RNs eingebautes `Modal` reicht). Verifiziert im iOS-Simulator.
+37. **Bug: Budget-Tab zeigte Posten aller Monate gemischt statt nach Monat getrennt.** Nutzer-Report: eine im September
+    erfasste Miete (1000 CHF) und eine im Juli erfasste Miete (1200 CHF, per Kalender rückwirkend eingetragen)
+    erschienen beide gleichzeitig im Budget-Tab und wurden gemeinsam verrechnet — obwohl pro Monat eigentlich nur die
+    jeweils eigenen Posten zählen sollten. **Wichtiger Befund bei der Fehlersuche:** die DB-Schicht war nie das
+    Problem — `line_items.month_id` wird schon seit dem ursprünglichen DB-Commit korrekt pro Posten aus
+    `monthOfDate(item.date)` gesetzt (`insertLineItem()` in `repository.ts`), und `listLineItemsForMonth()`/
+    `computeTotals(db, month)` (beide bereits vorhanden, SQL-seitig sauber nach Monat gefiltert) wurden schlicht von
+    keinem Screen benutzt. Der eigentliche Bug lag rein in `App.tsx`: `listLineItems(db)` lädt bewusst ALLE Posten aller
+    Monate auf einmal in den React-State (richtig so — Kalender-Tab und "Bearbeiten"-Sprung brauchen das
+    monatsübergreifend), aber `BudgetScreen` reichte diese komplette, ungefilterte Liste direkt an `computeBudget()`
+    durch, ohne je nach Monat zu filtern. Das monatliche Einkommen war zusätzlich strukturell auf "immer der heutige
+    Kalendermonat" hartcodiert (`setIncomeCents(db, monthOfDate(todayIso()), …)`), es gab also gar keine Möglichkeit,
+    ein Einkommen für einen anderen Monat zu hinterlegen. **Fix:** `BudgetScreen` bekommt einen eigenen `selectedMonth`
+    -State (Default: aktueller Monat) mit zwei neuen Pfeil-Buttons ("‹ September 2026 ›") zum Vor-/Zurückblättern
+    (`shiftMonth()`/`formatMonthLabel()`, neue reine Helferfunktionen — `formatMonthLabel` nutzt
+    `toLocaleDateString('de-CH', {month:'long', year:'numeric'})`, passend zum bereits an anderer Stelle verwendeten
+    Locale-Format in `pdfExport.ts`). Die App-weite `items`-Liste bleibt unangetastet (weiterhin alle Monate, für
+    Kalender/Bearbeiten), `BudgetScreen` filtert sie selbst per `useMemo` auf
+    `monthOfDate(item.date) === selectedMonth` — dieselbe Filterlogik, die die DB-Schicht in `listLineItemsForMonth()`
+    schon hatte, nur jetzt auch tatsächlich angewendet. Einkommen wurde von einem einzelnen App-weiten State auf zwei
+    neue Funktionen umgestellt, die `BudgetScreen` als Props bekommt (`getIncomeForMonth`/`setIncomeForMonth`, beide
+    wrappen die längst vorhandenen, aber ungenutzten `getMonth`/`setIncomeCents` aus dem Repository) — `BudgetScreen`
+    lädt das Einkommen des `selectedMonth` bei jedem Monatswechsel per `useEffect` frisch aus der DB nach (mit
+    `cancelled`-Flag gegen Race Conditions bei schnellem Weiterblättern), statt es wie die Posten dauerhaft im Speicher
+    zu halten. PDF-Export exportiert dadurch automatisch nur noch den gerade sichtbaren Monat (`monthItems` statt der
+    kompletten Liste), der Dateiname trägt jetzt zusätzlich den Monat (`budgetpilot-bericht-2026-09-<timestamp>.pdf`).
+    **Verifiziert im iOS-Simulator:** September 2026 zeigt nach dem Fix nur noch die September-Miete (1000 CHF) und die
+    dort erfassten geplanten Käufe: Restbudget 3935.05 CHF (78.7%); Juli 2026 zeigt separat nur die Juli-Miete (1200
+    CHF), keine geplanten Käufe, und ein leeres (nicht das September-)Einkommensfeld — genau das vom Nutzer erwartete
+    Verhalten. **Lehre:** die DB-/Repository-Schicht in diesem Projekt ist grosszügig genug angelegt worden
+    (`listLineItemsForMonth`, `computeTotals` pro Monat existierten schon), dass ein UI-Bug wie dieser nicht immer ein
+    Zeichen für ein fehlendes Feature ist — es lohnt sich, zuerst zu prüfen, ob die richtige Funktion bereits existiert,
+    bevor man sie neu baut. **Nachtrag (Nutzerwunsch direkt danach):** einzeln durch Monate blättern war für weite
+    Sprünge (z. B. von September zurück in den Januar) zu langsam — antippen von "September 2026" öffnet jetzt ein
+    `Modal`-Popup mit eigener Jahres-Navigation ("‹ 2026 ›") und einem 12-Monats-Raster (kurze Monatsnamen via
+    `toLocaleDateString(..., {month:'short'})`), der aktuell gewählte Monat ist farblich hervorgehoben. Popup-Jahr ist
+    bewusst ein eigener State (`pickerYear`, initialisiert beim Öffnen aus dem gerade sichtbaren Monat) statt direkt an
+    `selectedMonth` gekoppelt — so verändert reines Jahre-Vorblättern im Popup noch nicht den im Hintergrund sichtbaren
+    Monat, erst ein Antippen einer Monatskachel übernimmt die Auswahl. Kein natives Picker-Modul nötig (RNs eingebautes
+    `Modal` reicht). Verifiziert im iOS-Simulator.
 
-38. **Bug: PDF-Export liess sich auf Android nicht bei Google Drive speichern — "Bearbeitungszugriff auf dieses Dokument verweigert".** Nutzer-Report auf dem echten Galaxy S21 FE. Ursache: `savePdfAndShare()` (`pdfExport.ts`) nutzte RNs eingebaute `Share.share({ url: 'file://...' })` — die reicht auf Android einen rohen `file://`-Pfad unverändert weiter, ohne der Empfänger-App (hier Google Drive) irgendwelche Zugriffsrechte darauf zu gewähren. Seit mehreren Android-Versionen verlangt das System dafür zwingend einen `content://`-Link über einen sogenannten FileProvider mit explizit gewährter `FLAG_GRANT_READ_URI_PERMISSION` — ohne das lehnen moderne Apps (v. a. Googles eigene) den rohen Pfad ab, oft mit genau so einer wenig aussagekräftigen "Zugriff verweigert"-Meldung statt eines Absturzes. **Kein Berechtigungsproblem im klassischen Sinn** (kein fehlender Runtime-Permission-Dialog wie bei Kamera/Kontakten) — das PDF wird ja bereits erfolgreich im privaten App-Speicher erstellt, dafür braucht Android keine Erlaubnis; der Fehler passiert erst beim App-übergreifenden Teilen des fertigen Links. **Fix:** `react-native-share` installiert (Standard-Library für genau dieses Problem, übernimmt die FileProvider-Umwandlung automatisch) und `savePdfAndShare()` von `Share.share()` auf `Share.open({ url, type: 'application/pdf', filename, failOnCancel: false })` umgestellt. Android-seitige Einrichtung von Hand nachgezogen (macht die Library nicht automatisch): `<provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.provider" ...>`-Eintrag in `AndroidManifest.xml`, neue `android/app/src/main/res/xml/file_paths.xml` mit `<files-path path="."/>` (deckt `RNFS.DocumentDirectoryPath` ab — das entspricht auf Android `context.getFilesDir()`, verifiziert direkt im RNFS-Quellcode statt geraten, siehe `RNFSManager.java`), und `MainApplication.kt` implementiert jetzt zusätzlich `cl.json.ShareApplication` mit `getFileProviderAuthority()`. iOS bleibt unverändert funktionsfähig (`react-native-share` deckt beide Plattformen ab, `pod install` nachgezogen). **Verifiziert auf dem echten Galaxy S21 FE:** PDF-Export lässt sich jetzt erfolgreich bei Google Drive speichern.
-    - **Nachtrag, gleicher Test:** der exportierte Dateiname bestand aus dem Monat plus einem rohen `Date.now()`-Millisekunden-Zeitstempel (z. B. `budgetpilot-bericht-2026-09-1234567890123.pdf`) — für den Nutzer nicht als Datum erkennbar ("sollte doch dem Tag entsprechen"). Fix: durch ein lesbares Erstellungsdatum plus Uhrzeit ersetzt (`budgetpilot-bericht-2026-09-erstellt-2026-09-09-0929.pdf`) — Uhrzeit bewusst mit drin, damit zwei Exporte am selben Tag sich nicht gegenseitig überschreiben.
+38. **Bug: PDF-Export liess sich auf Android nicht bei Google Drive speichern — "Bearbeitungszugriff auf dieses Dokument
+    verweigert".** Nutzer-Report auf dem echten Galaxy S21 FE. Ursache: `savePdfAndShare()` (`pdfExport.ts`) nutzte RNs
+    eingebaute `Share.share({ url: 'file://...' })` — die reicht auf Android einen rohen `file://`-Pfad unverändert
+    weiter, ohne der Empfänger-App (hier Google Drive) irgendwelche Zugriffsrechte darauf zu gewähren. Seit mehreren
+    Android-Versionen verlangt das System dafür zwingend einen `content://`-Link über einen sogenannten FileProvider mit
+    explizit gewährter `FLAG_GRANT_READ_URI_PERMISSION` — ohne das lehnen moderne Apps (v. a. Googles eigene) den rohen
+    Pfad ab, oft mit genau so einer wenig aussagekräftigen "Zugriff verweigert"-Meldung statt eines Absturzes. **Kein
+    Berechtigungsproblem im klassischen Sinn** (kein fehlender Runtime-Permission-Dialog wie bei Kamera/Kontakten) — das
+    PDF wird ja bereits erfolgreich im privaten App-Speicher erstellt, dafür braucht Android keine Erlaubnis; der Fehler
+    passiert erst beim App-übergreifenden Teilen des fertigen Links. **Fix:** `react-native-share` installiert
+    (Standard-Library für genau dieses Problem, übernimmt die FileProvider-Umwandlung automatisch) und
+    `savePdfAndShare()` von `Share.share()` auf
+    `Share.open({ url, type: 'application/pdf', filename, failOnCancel: false })` umgestellt. Android-seitige
+    Einrichtung von Hand nachgezogen (macht die Library nicht automatisch):
+    `<provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.provider" ...>`
+    -Eintrag in `AndroidManifest.xml`, neue `android/app/src/main/res/xml/file_paths.xml` mit `<files-path path="."/>`
+    (deckt `RNFS.DocumentDirectoryPath` ab — das entspricht auf Android `context.getFilesDir()`, verifiziert direkt im
+    RNFS-Quellcode statt geraten, siehe `RNFSManager.java`), und `MainApplication.kt` implementiert jetzt zusätzlich
+    `cl.json.ShareApplication` mit `getFileProviderAuthority()`. iOS bleibt unverändert funktionsfähig
+    (`react-native-share` deckt beide Plattformen ab, `pod install` nachgezogen). **Verifiziert auf dem echten Galaxy
+    S21 FE:** PDF-Export lässt sich jetzt erfolgreich bei Google Drive speichern.
+    - **Nachtrag, gleicher Test:** der exportierte Dateiname bestand aus dem Monat plus einem rohen `Date.now()`
+      -Millisekunden-Zeitstempel (z. B. `budgetpilot-bericht-2026-09-1234567890123.pdf`) — für den Nutzer nicht als
+      Datum erkennbar ("sollte doch dem Tag entsprechen"). Fix: durch ein lesbares Erstellungsdatum plus Uhrzeit ersetzt
+      (`budgetpilot-bericht-2026-09-erstellt-2026-09-09-0929.pdf`) — Uhrzeit bewusst mit drin, damit zwei Exporte am
+      selben Tag sich nicht gegenseitig überschreiben.
 
-39. **Foto-Golden-Set von n=3 auf n=10 erweitert — bewusst ohne automatisierten Batch-Runner, und bewusst nicht im Repo.** Die Foto-Extraktion hatte bisher nur 3 Einzel-Testbelege (siehe Erfolgskriterien), deutlich dünner als das 30-Fälle-Set beim Freitext. 10 zusätzliche Kassenzettel-Fotos (von Google zusammengesucht, bewusst nicht alle perfekt lesbar — Unschärfe, Falten, Lichtspiegelung, in der Hand fotografiert) liegen lokal in einem gitignored Ordner. Erwartete Werte (Betrag/Kategorie) manuell von den Bildern abgelesen und in einer ebenfalls gitignored Datei festgehalten. **Anders als beim Freitext-Golden-Set (`goldenSet.ts`, komplett erfunden, deshalb committet) landet weder das eine noch das andere im Repo — auch keine daraus abgeleiteten Details wie Beträge oder Filialstandorte hier in CLAUDE.md:** es sind Transaktionsdaten fremder Personen, kein selbst erfundenes Testmaterial, und diese Datei hier ist ja selbst Teil des Repos. Ein paar der zehn Fälle sind bewusst kategorisch mehrdeutig (kein reiner Lebensmittel-Einkauf), da bisher nur klar-eindeutige Fälle getestet wurden.
-    - **Wichtiger struktureller Unterschied zum Freitext-Golden-Set:** dort ist `input` ein String, der sich ohne Nutzerinteraktion direkt durch `generate()` schicken lässt — ein vollautomatischer Batch-Runner-Button war deshalb einfach. Für Fotos gibt es keinen Weg, 10 verschiedene Bilder ohne Nutzerinteraktion nacheinander an `react-native-image-picker` zu übergeben (der System-Bildpicker verlangt jedes Mal eine manuelle Auswahl). Bewusst **kein** Versuch, das zu automatisieren (z. B. über einen versteckten Debug-Pfad, der Bilder direkt von der Platte lädt) — der Aufwand stünde in keinem Verhältnis zum Nutzen für einen einmaligen 10-Bilder-Testlauf in einem PoC. Stattdessen: `compareToExpected()` aus `goldenSet.ts` wiederverwendet (nimmt ohnehin nur Betrag/Kategorie/Häufigkeit entgegen, unabhängig von der Herkunft), die 10 Fotos einmalig über `xcrun simctl addmedia` in die Fotomediathek des iOS-Simulators importiert, und jeder Fall wird einzeln von Hand über den bestehenden "📷 Beleg fotografieren" → "Hochladen"-Weg durchgetestet.
-    - **Stolperstein beim Import:** `xcrun simctl addmedia` lehnte 2 der 10 Bilder mit "File type unsupported" ab — sie lagen als WebP vor, das der Simulator-Fotoimport nicht unterstützt (JPEG/PNG gehen problemlos). Fix: die zwei betroffenen Dateien mit `sips -s format jpeg` verlustarm nach JPEG konvertiert, `photoGoldenSet.ts` entsprechend angepasst.
-    - **Verifiziert (lokal, nicht Teil des committeten Testlaufs):** `src/__tests__/photoGoldenSet.test.ts` (5 Fälle — eindeutige IDs/Dateinamen, nur Bilddateien referenziert, Datenstruktur mit `compareToExpected()` kompatibel) grün, lokal insgesamt 71/71 Tests.
-    - **Ergebnis der On-Device-Messung (alle 10 einzeln über den echten "📷 Beleg fotografieren"-Weg im iOS-Simulator getestet, nur die Trefferquote hier festgehalten, keine Rohdaten):** Betrag 9/10, Kategorie 9/10 (die eine Abweichung eine vertretbare Alternativ-Kategorisierung, keine gefährliche Fehlklassifikation), Häufigkeit 10/10, komplett korrekt 8/10 (80%). Der eine Betrags-Fehler trat bei einem schräg fotografierten Beleg auf — passt zum schon dokumentierten Bildqualitätsrisiko (Lessons Learned #16), kein neuer Fehlertyp. Bemerkenswert: die beiden Belege mit den bisher schwierigsten Strukturen (eine mehrspaltige Artikeltabelle wie beim ursprünglichen Migros-Fall in #17, sowie ein Beleg mit einer negativen Storno-/Rabattzeile) liefen in diesem Durchlauf beide fehlerfrei durch — bestätigt den Bounding-Box-Zeilen-Rekonstruktions-Fix (#19) auf zwei weiteren, unabhängigen Beispielen.
+39. **Foto-Golden-Set von n=3 auf n=10 erweitert — bewusst ohne automatisierten Batch-Runner, und bewusst nicht im
+    Repo.** Die Foto-Extraktion hatte bisher nur 3 Einzel-Testbelege (siehe Erfolgskriterien), deutlich dünner als das
+    30-Fälle-Set beim Freitext. 10 zusätzliche Kassenzettel-Fotos (von Google zusammengesucht, bewusst nicht alle
+    perfekt lesbar — Unschärfe, Falten, Lichtspiegelung, in der Hand fotografiert) liegen lokal in einem gitignored
+    Ordner. Erwartete Werte (Betrag/Kategorie) manuell von den Bildern abgelesen und in einer ebenfalls gitignored Datei
+    festgehalten. **Anders als beim Freitext-Golden-Set (`goldenSet.ts`, komplett erfunden, deshalb committet) landet
+    weder das eine noch das andere im Repo — auch keine daraus abgeleiteten Details wie Beträge oder Filialstandorte
+    hier in CLAUDE.md:** es sind Transaktionsdaten fremder Personen, kein selbst erfundenes Testmaterial, und diese
+    Datei hier ist ja selbst Teil des Repos. Ein paar der zehn Fälle sind bewusst kategorisch mehrdeutig (kein reiner
+    Lebensmittel-Einkauf), da bisher nur klar-eindeutige Fälle getestet wurden.
+    - **Wichtiger struktureller Unterschied zum Freitext-Golden-Set:** dort ist `input` ein String, der sich ohne
+      Nutzerinteraktion direkt durch `generate()` schicken lässt — ein vollautomatischer Batch-Runner-Button war deshalb
+      einfach. Für Fotos gibt es keinen Weg, 10 verschiedene Bilder ohne Nutzerinteraktion nacheinander an
+      `react-native-image-picker` zu übergeben (der System-Bildpicker verlangt jedes Mal eine manuelle Auswahl). Bewusst
+      **kein** Versuch, das zu automatisieren (z. B. über einen versteckten Debug-Pfad, der Bilder direkt von der Platte
+      lädt) — der Aufwand stünde in keinem Verhältnis zum Nutzen für einen einmaligen 10-Bilder-Testlauf in einem PoC.
+      Stattdessen: `compareToExpected()` aus `goldenSet.ts` wiederverwendet (nimmt ohnehin nur
+      Betrag/Kategorie/Häufigkeit entgegen, unabhängig von der Herkunft), die 10 Fotos einmalig über
+      `xcrun simctl addmedia` in die Fotomediathek des iOS-Simulators importiert, und jeder Fall wird einzeln von Hand
+      über den bestehenden "📷 Beleg fotografieren" → "Hochladen"-Weg durchgetestet.
+    - **Stolperstein beim Import:** `xcrun simctl addmedia` lehnte 2 der 10 Bilder mit "File type unsupported" ab — sie
+      lagen als WebP vor, das der Simulator-Fotoimport nicht unterstützt (JPEG/PNG gehen problemlos). Fix: die zwei
+      betroffenen Dateien mit `sips -s format jpeg` verlustarm nach JPEG konvertiert, `photoGoldenSet.ts` entsprechend
+      angepasst.
+    - **Verifiziert (lokal, nicht Teil des committeten Testlaufs):** `src/__tests__/photoGoldenSet.test.ts` (5 Fälle —
+      eindeutige IDs/Dateinamen, nur Bilddateien referenziert, Datenstruktur mit `compareToExpected()` kompatibel) grün,
+      lokal insgesamt 71/71 Tests.
+    - **Ergebnis der On-Device-Messung (alle 10 einzeln über den echten "📷 Beleg fotografieren"-Weg im iOS-Simulator
+      getestet, nur die Trefferquote hier festgehalten, keine Rohdaten):** Betrag 9/10, Kategorie 9/10 (die eine
+      Abweichung eine vertretbare Alternativ-Kategorisierung, keine gefährliche Fehlklassifikation), Häufigkeit 10/10,
+      komplett korrekt 8/10 (80%). Der eine Betrags-Fehler trat bei einem schräg fotografierten Beleg auf — passt zum
+      schon dokumentierten Bildqualitätsrisiko (Lessons Learned #16), kein neuer Fehlertyp. Bemerkenswert: die beiden
+      Belege mit den bisher schwierigsten Strukturen (eine mehrspaltige Artikeltabelle wie beim ursprünglichen
+      Migros-Fall in #17, sowie ein Beleg mit einer negativen Storno-/Rabattzeile) liefen in diesem Durchlauf beide
+      fehlerfrei durch — bestätigt den Bounding-Box-Zeilen-Rekonstruktions-Fix (#19) auf zwei weiteren, unabhängigen
+      Beispielen.
 
-40. **Bug: Dark-Mode-Umschalter (Settings-Tab, siehe Lessons Learned zum Dark-Mode-Toggle) fiel nach jedem App-Neustart auf das System-Theme zurück.** Nutzer-Report: einmal auf Dark Mode gestellt, sollte das auch so bleiben, nicht nur bis zum nächsten Neustart. Ursache: `darkModeOverride`-State in `App()` wurde bei jedem Mount frisch aus `useColorScheme()` initialisiert (`useState(() => systemColorScheme === 'dark')`), ohne die zuletzt vom Nutzer getroffene Wahl irgendwo abzulegen — der Schalter selbst funktionierte einwandfrei, nur eben nicht über einen Neustart hinweg. **Fix:** neue `readPersistedDarkMode()`/`writePersistedDarkMode()`-Helfer, die die Wahl als einfache Textdatei (`dark-mode-preference.txt`) über `RNFS` in `RNFS.DocumentDirectoryPath` ablegen — bewusst dieselbe Datei-Persistenz-Strategie wie der bereits bestehende toppreise.ch-Cache (`toppreise.ts`), keine neue Dependency nötig. Kein Werte-auf-der-Platte-Fall (allererster Start) lässt den bisherigen System-Theme-Default unangetastet. Da `RNFS.readFile` asynchron ist, ein `useState`-Initializer aber synchron sein muss, lädt ein `useEffect` beim Mount die persistierte Wahl nach und überschreibt den System-Theme-Default erst, sobald sie geladen ist (kein Layout-Flackern in der Praxis, da die Datei winzig ist). Der Setter, den der Settings-Tab-Schalter aufruft, wurde um das Schreiben auf die Platte erweitert (`setDarkModeOverrideAndPersist`, per `useCallback` stabil gehalten, damit der `DarkModeOverrideContext`-Value nicht bei jedem Render neu erzeugt wird). **Verifiziert im iOS-Simulator, beide Richtungen:** Dark Mode aktiviert, App komplett beendet (`simctl terminate`) und neu gestartet (`simctl launch`) — startet weiterhin im Dark Mode, obwohl das Simulator-System-Theme auf Light steht. Danach zurück auf Light Mode umgeschaltet und denselben Neustart wiederholt — startet ebenso zuverlässig wieder in Light Mode. Beide Zustände (nicht nur "eingeschaltet") überleben also den Neustart korrekt.
+40. **Bug: Dark-Mode-Umschalter (Settings-Tab, siehe Lessons Learned zum Dark-Mode-Toggle) fiel nach jedem App-Neustart
+    auf das System-Theme zurück.** Nutzer-Report: einmal auf Dark Mode gestellt, sollte das auch so bleiben, nicht nur
+    bis zum nächsten Neustart. Ursache: `darkModeOverride`-State in `App()` wurde bei jedem Mount frisch aus
+    `useColorScheme()` initialisiert (`useState(() => systemColorScheme === 'dark')`), ohne die zuletzt vom Nutzer
+    getroffene Wahl irgendwo abzulegen — der Schalter selbst funktionierte einwandfrei, nur eben nicht über einen
+    Neustart hinweg. **Fix:** neue `readPersistedDarkMode()`/`writePersistedDarkMode()`-Helfer, die die Wahl als
+    einfache Textdatei (`dark-mode-preference.txt`) über `RNFS` in `RNFS.DocumentDirectoryPath` ablegen — bewusst
+    dieselbe Datei-Persistenz-Strategie wie der bereits bestehende toppreise.ch-Cache (`toppreise.ts`), keine neue
+    Dependency nötig. Kein Werte-auf-der-Platte-Fall (allererster Start) lässt den bisherigen System-Theme-Default
+    unangetastet. Da `RNFS.readFile` asynchron ist, ein `useState`-Initializer aber synchron sein muss, lädt ein
+    `useEffect` beim Mount die persistierte Wahl nach und überschreibt den System-Theme-Default erst, sobald sie geladen
+    ist (kein Layout-Flackern in der Praxis, da die Datei winzig ist). Der Setter, den der Settings-Tab-Schalter
+    aufruft, wurde um das Schreiben auf die Platte erweitert (`setDarkModeOverrideAndPersist`, per `useCallback` stabil
+    gehalten, damit der `DarkModeOverrideContext`-Value nicht bei jedem Render neu erzeugt wird). **Verifiziert im
+    iOS-Simulator, beide Richtungen:** Dark Mode aktiviert, App komplett beendet (`simctl terminate`) und neu gestartet
+    (`simctl launch`) — startet weiterhin im Dark Mode, obwohl das Simulator-System-Theme auf Light steht. Danach zurück
+    auf Light Mode umgeschaltet und denselben Neustart wiederholt — startet ebenso zuverlässig wieder in Light Mode.
+    Beide Zustände (nicht nur "eingeschaltet") überleben also den Neustart korrekt.
 
-41. **Live-Kameraaufnahme (`launchCamera()`, "Jetzt aufnehmen") erstmals getestet — bisher lief jeder Foto-Test nur über "Hochladen".** Auffiel beim Rückblick auf die bisherigen Tests: sowohl die einzelnen Testbelege als auch das Foto-Golden-Set (n=3/n=10, siehe Lessons Learned #39) liefen ausnahmslos über `launchImageLibrary()` — der `launchCamera()`-Pfad (Berechtigungsdialog, native Kamera-UI, Foto-Übergabe) war technisch komplett unverifiziert, obwohl Lessons Learned #6 schon andeutete, dass beide Pfade sich unterscheiden können (JPEG-Kompression). Mangels physischem Papierbeleg wurde stattdessen einer der Testbelege auf einem zweiten Handy angezeigt und mit dem Galaxy S21 FE über "Jetzt aufnehmen" direkt abfotografiert (Bildschirm-Aufnahme statt Papier — für einen reinen Funktionstest des Codepfads ausreichend, auch wenn nicht exakt dieselben Bildeigenschaften wie ein echtes Papierfoto). **Ergebnis auf echter Hardware:** `launchCamera()` funktioniert einwandfrei, die KI-Extraktion lieferte ein korrektes Ergebnis. Damit ist auch dieser bisher blinde Fleck geschlossen — beide Foto-Erfassungswege (`launchCamera()` und `launchImageLibrary()`) sind jetzt mindestens einmal auf echter Hardware verifiziert.
+41. **Live-Kameraaufnahme (`launchCamera()`, "Jetzt aufnehmen") erstmals getestet — bisher lief jeder Foto-Test nur
+    über "Hochladen".** Auffiel beim Rückblick auf die bisherigen Tests: sowohl die einzelnen Testbelege als auch das
+    Foto-Golden-Set (n=3/n=10, siehe Lessons Learned #39) liefen ausnahmslos über `launchImageLibrary()` — der
+    `launchCamera()`-Pfad (Berechtigungsdialog, native Kamera-UI, Foto-Übergabe) war technisch komplett unverifiziert,
+    obwohl Lessons Learned #6 schon andeutete, dass beide Pfade sich unterscheiden können (JPEG-Kompression). Mangels
+    physischem Papierbeleg wurde stattdessen einer der Testbelege auf einem zweiten Handy angezeigt und mit dem Galaxy
+    S21 FE über "Jetzt aufnehmen" direkt abfotografiert (Bildschirm-Aufnahme statt Papier — für einen reinen
+    Funktionstest des Codepfads ausreichend, auch wenn nicht exakt dieselben Bildeigenschaften wie ein echtes
+    Papierfoto). **Ergebnis auf echter Hardware:** `launchCamera()` funktioniert einwandfrei, die KI-Extraktion lieferte
+    ein korrektes Ergebnis. Damit ist auch dieser bisher blinde Fleck geschlossen — beide Foto-Erfassungswege
+    (`launchCamera()` und `launchImageLibrary()`) sind jetzt mindestens einmal auf echter Hardware verifiziert.
 
 ## Meilensteine (ca. 3 Tage POC)
 
 **Tag 1 – Setup & Basisfunktionen**
 
 - ✅ App Skeleton + Git/GitHub-Setup
-- ✅ Lokale DB (op-sqlite, Schema + Migrationen + Repository, in App.tsx angebunden — Unit-Tests grün UND ausführlich im iOS-Simulator verifiziert, siehe Lessons Learned #32–#35)
+- ✅ Lokale DB (op-sqlite, Schema + Migrationen + Repository, in App.tsx angebunden — Unit-Tests grün UND ausführlich im
+  iOS-Simulator verifiziert, siehe Lessons Learned #32–#35)
 - ✅ Eingabe (Freitext) — strukturierte Felder (Kategorie-Chips, Betrag, Häufigkeit) im Entwurf-Screen vorhanden
 - ✅ Baseline Budget Engine (Restbudget, Warnungen) — Fixkosten/geplante Käufe aus `cadence` abgeleitet
-- ✅ Golden Set (Freitext) angelegt: 30 Beispiele + Messkriterien (Betrag/Kategorie/Häufigkeit-Trefferquote), siehe Lessons Learned #30
+- ✅ Golden Set (Freitext) angelegt: 30 Beispiele + Messkriterien (Betrag/Kategorie/Häufigkeit-Trefferquote), siehe
+  Lessons Learned #30
 
 **Tag 2 – On-Device KI Integration**
 
 - ✅ Gemma On-Device Inferenz integriert (minimaler Test, funktioniert)
-- ✅ Strukturierte Extraktion + Kategorisierung + UI zum Korrigieren (DraftScreen mit needs_input-Markierung, Low-Confidence-Rahmen)
-- ✅ Messung Accuracy UND Latency auf Golden Set, sowohl iOS-Simulator (90%, Ø 14.1s/Fall) als auch echtes Android-Gerät (90%, Ø 103.7s/Fall, n=30, siehe Lessons Learned #30) — ⏳ weitere Prompt-Iteration noch offen
-- ✅ Umstieg auf Gemma 4 E2B-it (multimodal) inkl. Kamera-/Galerie-Erfassung (`react-native-image-picker`) vollständig im Simulator verifiziert (Download, `pod install`, Foto-Vorschau im Entwurf-Screen) — ⏳ inhaltliche Genauigkeit der Foto-Extraktion bei echten Belegen ungenügend, weitere Untersuchung nötig (siehe Risiken/Lessons Learned)
+- ✅ Strukturierte Extraktion + Kategorisierung + UI zum Korrigieren (DraftScreen mit needs_input-Markierung,
+  Low-Confidence-Rahmen)
+- ✅ Messung Accuracy UND Latency auf Golden Set, sowohl iOS-Simulator (90%, Ø 14.1s/Fall) als auch echtes Android-Gerät
+  (90%, Ø 103.7s/Fall, n=30, siehe Lessons Learned #30) — ⏳ weitere Prompt-Iteration noch offen
+- ✅ Umstieg auf Gemma 4 E2B-it (multimodal) inkl. Kamera-/Galerie-Erfassung (`react-native-image-picker`) vollständig im
+  Simulator verifiziert (Download, `pod install`, Foto-Vorschau im Entwurf-Screen) — ⏳ inhaltliche Genauigkeit der
+  Foto-Extraktion bei echten Belegen ungenügend, weitere Untersuchung nötig (siehe Risiken/Lessons Learned)
 
 **Tag 3 – Demo-Flow & Export**
 
-- ✅ toppreise.ch Integration (`fetch` + HTML-Parser + JSON-Cache) und "Preise"-Tab mit editierbarem Suchbegriff — Unit-Tests grün UND live im iOS-Simulator verifiziert (echter Preisabruf, siehe Status oben)
-- ✅ Zusammenfassung (kurz + detailliert) + PDF-Export — im Simulator verifiziert, Layout/Design noch in Überarbeitung (siehe Status)
-- ✅ Offline-Demo im Flugmodus verifiziert (echtes Galaxy S21 FE): mit aktiviertem Flugmodus lief die Freitext-Extraktion ("Ausgabe erfassen") normal weiter (KI-Inferenz ist rein on-device, kein Netzwerk nötig), während "Preis suchen" im Preise-Tab korrekt mit "Preisabruf fehlgeschlagen: Network request failed" abbrach — genau das erwartete Verhalten, der neue Hinweistext dort war also zutreffend. ✅ POC-Report (Artifact, noch nicht veröffentlicht) und Demo-Skript (`demo-skript.md`, gitignored) inzwischen ebenfalls fertig.
-- ⏳ Test auf echten Geräten (iPhone 12) — Modell-Download läuft jetzt automatisch über `ModelRegistry` (kein eigener Sandbox-Download-Mechanismus mehr nötig), aber iOS Extended-Virtual-Addressing-Entitlement (kostenpflichtiger Account) und RAM-Realitätscheck auf dem 4-GB-iPhone-12 stehen noch aus. Galaxy S21 FE ist dagegen längst ausführlich verifiziert (siehe Lessons Learned #22/#24/#30 und oben).
+- ✅ toppreise.ch Integration (`fetch` + HTML-Parser + JSON-Cache) und "Preise"-Tab mit editierbarem Suchbegriff —
+  Unit-Tests grün UND live im iOS-Simulator verifiziert (echter Preisabruf, siehe Status oben)
+- ✅ Zusammenfassung (kurz + detailliert) + PDF-Export — im Simulator verifiziert, Layout/Design noch in Überarbeitung
+  (siehe Status)
+- ✅ Offline-Demo im Flugmodus verifiziert (echtes Galaxy S21 FE): mit aktiviertem Flugmodus lief die Freitext-Extraktion
+  ("Ausgabe erfassen") normal weiter (KI-Inferenz ist rein on-device, kein Netzwerk nötig), während "Preis suchen" im
+  Preise-Tab korrekt mit "Preisabruf fehlgeschlagen: Network request failed" abbrach — genau das erwartete Verhalten,
+  der neue Hinweistext dort war also zutreffend. ✅ POC-Report (Artifact, noch nicht veröffentlicht) und Demo-Skript
+  (`demo-skript.md`, gitignored) inzwischen ebenfalls fertig.
+- ⏳ Test auf echten Geräten (iPhone 12) — Modell-Download läuft jetzt automatisch über `ModelRegistry` (kein eigener
+  Sandbox-Download-Mechanismus mehr nötig), aber iOS Extended-Virtual-Addressing-Entitlement (kostenpflichtiger Account)
+  und RAM-Realitätscheck auf dem 4-GB-iPhone-12 stehen noch aus. Galaxy S21 FE ist dagegen längst ausführlich
+  verifiziert (siehe Lessons Learned #22/#24/#30 und oben).
 
 ## Deliverables
 
